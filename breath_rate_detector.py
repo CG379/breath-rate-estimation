@@ -175,7 +175,7 @@ def main():
 
                         if rate1 and rate2:
                             # Use better data fusion if if it is discussed in workshop
-                            fused_rate = (rate1 + rate2) / 2
+                            fused_rate = (rate1 + rate1) / 2
                             print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
                             f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
 
