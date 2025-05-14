@@ -10,7 +10,7 @@ Breathing signals are low-frequency (~0.2 - 0.5 Hz)
 Any drift will be < 0.05Hz
 
 '''
-
+# TODO: fix breath rate for stm timer, save data in directory, data fusion, keyboard interupt
 class SerialConnection:
     def __init__(self, baudrate=115200):
         self.serialInst = serial.Serial()
@@ -175,7 +175,7 @@ def main():
 
                         if rate1 and rate2:
                             # Use better data fusion if if it is discussed in workshop
-                            fused_rate = (rate1 + rate1) / 2
+                            fused_rate = (rate1 + rate2) / 2
                             print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
                             f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
 
