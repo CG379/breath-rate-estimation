@@ -76,6 +76,8 @@ def apply_lowpass(new_sample, zf, b, a):
     output, zf = lfilter(b, a, [new_sample], zi=zf)
     return output[0], zf
 
+
+
 class BreathRateEstimator:
     def __init__(self, buffer_size=750, sampling_rate=50, window_size=5, drift_window=200):
         self.fs = sampling_rate
@@ -93,6 +95,7 @@ class BreathRateEstimator:
         filtered, self.zf = apply_lowpass(new_sample, self.zf, self.b, self.a)
         
         # Drift removal (rolling mean)
+        # TODO: fix drift removal
         self.filtered_buffer.append(filtered)
         baseline = np.mean(self.filtered_buffer)
         detrended = filtered - baseline
@@ -142,52 +145,48 @@ def main():
     sensor1_estimator = BreathRateEstimator()
     sensor2_estimator = BreathRateEstimator()
 
-    data = []
     running = True
     print("Press ESC to stop the program.")
     # Signal STM32 to prepare
     serialInst.write("SX".encode('utf-8'))
     serialInst.flush()
 
-    # Add a wait to arm device if we decide to do that here
-    
-
-    try:
-        while running:
-            line = serialInst.readline().decode('utf-8').strip()
-            if line:
-                try:
-                    timestamp, value1, value2 = line.split(",")
-                    timestamp = float(timestamp)
-                    # For debugging
-                    smoothed1 = sensor1_estimator.update(float(value1), timestamp)
-                    smoothed2 = sensor2_estimator.update(float(value2), timestamp)
-
-                    rate1 = sensor1_estimator.estimate_breath_rate()
-                    rate2 = sensor2_estimator.estimate_breath_rate()
-
-                    if rate1 and rate2:
-                        # Use better data fusion if if it is discussed in workshop
-                        fused_rate = (rate1 + rate2) / 2
-                        print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
-                        data.append((timestamp, value1, value2, rate1, rate2, fused_rate))
-
-                except ValueError:
-                    print(f"Ignored malformed line: {line}")
-                    running = False
-    except Exception as e:
-        print(f"Error: {e}")
-
-    serial_conn.disconnect()
-
     # Save sensor data with timestamp in the filename
     current_time = time.strftime("%H-%M")
     
     sensor_data_filename = f"./sensor_data_{current_time}.csv"
-    with open(sensor_data_filename, "w") as f:
+    with open(sensor_data_filename, "w", buffering=1) as f:
         f.write("Timestamp,Sensor1,Sensor2,BreathRate1,BreathRate2,FusedBreathRate\n")
-        for timestamp, value1, value2, rate1, rate2, fused_rate in data:
-            f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
+
+        # Add a wait to arm device if we decide to do that here
+        try:
+            while running:
+                line = serialInst.readline().decode('utf-8').strip()
+                if line:
+                    try:
+                        timestamp, value1, value2 = line.split(",")
+                        timestamp = float(timestamp)
+                        # For debugging
+                        smoothed1 = sensor1_estimator.update(float(value1), timestamp)
+                        smoothed2 = sensor2_estimator.update(float(value2), timestamp)
+
+                        rate1 = sensor1_estimator.estimate_breath_rate()
+                        rate2 = sensor2_estimator.estimate_breath_rate()
+
+                        if rate1 and rate2:
+                            # Use better data fusion if if it is discussed in workshop
+                            fused_rate = (rate1 + rate2) / 2
+                            print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
+                            f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
+
+                    except ValueError:
+                        print(f"Ignored malformed line: {line}")
+                        continue
+        except Exception as e:
+            print(f"Error: {e}")
+
+    serial_conn.disconnect()
+            
     print(f"Sensor data saved to {sensor_data_filename}")
 
 if __name__ == "__main__":
