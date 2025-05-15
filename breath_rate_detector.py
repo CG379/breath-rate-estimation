@@ -82,11 +82,11 @@ def apply_lowpass(new_sample, zf, b, a):
 class BreathRateEstimator:
     def __init__(self, buffer_size=750, sampling_rate=50, window_size=5, drift_window=200):
         self.fs = sampling_rate
-        self.buffer = deque(maxlen=buffer_size)
         self.timestamp_buffer = deque(maxlen=buffer_size)
         self.b, self.a = butter_lowpass_coeffs(2.0, sampling_rate)
         self.zf = np.zeros(max(len(self.a), len(self.b)) - 1)
         self.window_size = window_size
+        self.buffer = deque(maxlen=buffer_size) # use singular buffer if we want to use FFT
         self.filtered_buffer = deque(maxlen=drift_window)
         self.smooth_buffer = deque(maxlen=window_size)
         self.output_buffer = deque(maxlen=sampling_rate * 15)
@@ -140,6 +140,8 @@ class BreathRateEstimator:
         return 60 / avg_breath_time  # breaths per minute
     
     def fft_breath_rate(self):
+        # TODO: Check if full DSP pipline is needed before FFT
+        # Drift removal definately needed for FFT, others?
         if len(self.buffer) < self.fs * 5:
             return None  # Not enough data
         signal = np.array(self.buffer)
@@ -168,7 +170,7 @@ class BreathRateEstimator:
         
         # Convert to BPM
         return dominant_freq * 60
-        
+
 
 
     # Might not need this extra averaging of buffer breathrates (introduces extra lag)
