@@ -4,13 +4,14 @@ from scipy.signal import butter, lfilter, find_peaks
 import numpy as np
 from collections import deque
 import time
+import os
 
 ''' Assumptions:
 Breathing signals are low-frequency (~0.2 - 0.5 Hz)
 Any drift will be < 0.05Hz
 
 '''
-# TODO: fix breath rate for stm timer, save data in directory, data fusion, keyboard interupt
+# TODO: fix breath rate for stm timer, data fusion
 class SerialConnection:
     def __init__(self, baudrate=115200):
         self.serialInst = serial.Serial()
@@ -91,6 +92,7 @@ class BreathRateEstimator:
         self.output_buffer = deque(maxlen=sampling_rate * 15)
 
     def update(self, new_sample, timestamp):
+        #TODO: rework DSP pipeline, include FFT somewhere? 
         # Low-pass filter
         filtered, self.zf = apply_lowpass(new_sample, self.zf, self.b, self.a)
         
@@ -111,22 +113,71 @@ class BreathRateEstimator:
         return smoothed
 
     def estimate_breath_rate(self):
-        """Estimate breath rate from buffered signal and actual timestamps."""
+        """Estimate breath rate from buffered signal and actual timestamps.
+        1. Find peaks in the signal
+        2. Calculate intervals between peaks
+        3. Calculate average interval time
+        4. Convert to breaths per minute
+        """
         if len(self.buffer) < self.fs * 5:
             return None  # Not enough data
 
         signal = np.array(self.buffer)
         timestamps = np.array(self.timestamp_buffer)
-
+        
+        # STM outputs in miliseconds, convert to seconds
+        # 
+        timestamps_seconds = timestamps * 0.1
+        
         peaks, _ = find_peaks(signal, distance=self.fs * 0.5)  # Can adjust threshold
         if len(peaks) < 2:
             return None
 
-        peak_times = timestamps[peaks]
+        peak_times = timestamps_seconds[peaks]
         intervals = np.diff(peak_times)
 
         avg_breath_time = np.mean(intervals)
         return 60 / avg_breath_time  # breaths per minute
+    
+    def fft_breath_rate(self):
+        if len(self.buffer) < self.fs * 5:
+            return None  # Not enough data
+        signal = np.array(self.buffer)
+        # Experiment with hamming or han window
+        wavelet = signal * np.hamming(len(signal))
+        # wavelet = signal * np.hanning(len(signal))
+        # FFT
+        fft_result = np.fft.rfft(wavelet)
+        # get rid of phase information
+        fft_magnitude = np.abs(fft_result)
+
+        # Get frequency axis
+        freq = np.fft.rfftfreq(len(signal), d=1/self.fs)
+
+        # Find peaks in frequency domain (within breathing range)
+        breathing_range_mask = (freq >= 0.1) & (freq <= 1.1)  # 6-60 BPM
+        valid_freqs = freq[breathing_range_mask]
+        valid_magnitudes = fft_magnitude[breathing_range_mask]
+        
+        if len(valid_magnitudes) == 0:
+            return None
+        
+        # Find dominant frequency
+        dominant_idx = np.argmax(valid_magnitudes)
+        dominant_freq = valid_freqs[dominant_idx]
+        
+        # Convert to BPM
+        return dominant_freq * 60
+        
+
+
+    # Might not need this extra averaging of buffer breathrates (introduces extra lag)
+    def get_breath_rate(self):
+        """Get the most recent breath rate estimate."""
+        if len(self.output_buffer) < self.window_size:
+            return None
+        return np.mean(self.output_buffer)
+
 
 
 # Create a SerialConnection instance
@@ -142,8 +193,9 @@ serialInst = serial_conn.serialInst
 
 # Main loop for reading data
 def main():
-    sensor1_estimator = BreathRateEstimator()
-    sensor2_estimator = BreathRateEstimator()
+    # Buffer length (seconds) = buffer_size / sampling_rate
+    sensor1_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
+    sensor2_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
 
     running = True
     print("Press ESC to stop the program.")
@@ -154,7 +206,8 @@ def main():
     # Save sensor data with timestamp in the filename
     current_time = time.strftime("%H-%M")
     
-    sensor_data_filename = f"./sensor_data_{current_time}.csv"
+    os.makedirs("data", exist_ok=True)
+    sensor_data_filename = f"./data/sensor_data_{current_time}.csv"
     with open(sensor_data_filename, "w", buffering=1) as f:
         f.write("Timestamp,Sensor1,Sensor2,BreathRate1,BreathRate2,FusedBreathRate\n")
 
@@ -173,12 +226,15 @@ def main():
                         rate1 = sensor1_estimator.estimate_breath_rate()
                         rate2 = sensor2_estimator.estimate_breath_rate()
 
+                        # TODO: Specify between resting, light, and heavy breathing
                         if rate1 and rate2:
                             # Use better data fusion if if it is discussed in workshop
                             fused_rate = (rate1 + rate2) / 2
                             print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
                             f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
-
+                    except KeyboardInterrupt:
+                        print("Exiting...")
+                        running = False
                     except ValueError:
                         print(f"Ignored malformed line: {line}")
                         continue
