@@ -215,6 +215,7 @@ def main():
         f.write("Timestamp,Sensor1,Sensor2,BreathRate1,BreathRate2,FusedBreathRate\n")
 
         # Add a wait to arm device if we decide to do that here
+        # Caibration phase:
 
         
         try:
