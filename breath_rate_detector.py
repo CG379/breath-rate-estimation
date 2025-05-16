@@ -196,6 +196,7 @@ serialInst = serial_conn.serialInst
 # Main loop for reading data
 def main():
     # Buffer length (seconds) = buffer_size / sampling_rate
+    # Put whatever sampeling rate the STM32 is using
     sensor1_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
     sensor2_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
 
@@ -214,6 +215,8 @@ def main():
         f.write("Timestamp,Sensor1,Sensor2,BreathRate1,BreathRate2,FusedBreathRate\n")
 
         # Add a wait to arm device if we decide to do that here
+
+        
         try:
             while running:
                 line = serialInst.readline().decode('utf-8').strip()
@@ -238,7 +241,7 @@ def main():
                         print("Exiting...")
                         running = False
                     except ValueError:
-                        print(f"Ignored malformed line: {line}")
+                        print(f"tf is this sh: {line}")
                         continue
         except Exception as e:
             print(f"Error: {e}")
