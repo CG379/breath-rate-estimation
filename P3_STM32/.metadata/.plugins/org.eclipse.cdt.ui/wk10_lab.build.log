@@ -1,0 +1,10 @@
+11:30:55 **** Incremental Build of configuration Debug for project wk10_lab ****
+make -j16 all 
+arm-none-eabi-size  wk10_lab.elf 
+   text	   data	    bss	    dec	    hex	filename
+  18628	     92	   2188	  20908	   51ac	wk10_lab.elf
+Finished building: default.size.stdout
+ 
+
+11:30:55 Build Finished. 0 errors, 0 warnings. (took 406ms)
+

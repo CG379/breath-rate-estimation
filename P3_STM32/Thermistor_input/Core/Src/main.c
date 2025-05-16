@@ -107,7 +107,10 @@ int main(void)
 	  HAL_ADC_PollForConversion(&hadc1, 100);
 	  ADC_value = HAL_ADC_GetValue(&hadc1);
 
-	  sprintf(uart_buf, "%lu,%lu,%u\r\n",time_counter,ADC_value,1);
+	  // Timestampe plus two ADC coutputs
+	  //sprintf(uart_buf, "%lu,%lu,%u\r\n",time_counter,ADC_value,1);
+
+	  sprintf(uart_buf, "ADC values: %lu\r\n",ADC_value);
 	  HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, strlen(uart_buf), 100);
 	  HAL_Delay(100);
 	  time_counter = time_counter + 1;

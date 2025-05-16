@@ -60,8 +60,8 @@ all: main-build
 main-build: Thermistor_input.elf secondary-outputs
 
 # Tool invocations
-Thermistor_input.elf Thermistor_input.map: $(OBJS) $(USER_OBJS) C:\Users\samlo\Documents\Monash\ University\Y3S1\TRC3500\Project\ 3\P3_STM32\Thermistor_input\STM32L432KCUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "Thermistor_input.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\samlo\Documents\Monash University\Y3S1\TRC3500\Project 3\P3_STM32\Thermistor_input\STM32L432KCUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Thermistor_input.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Thermistor_input.elf Thermistor_input.map: $(OBJS) $(USER_OBJS) C:\Users\samlo\Documents\Monash\ University\Y3S1\TRC3500\Project\ 3\breath-rate-estimation\P3_STM32\Thermistor_input\STM32L432KCUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "Thermistor_input.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\samlo\Documents\Monash University\Y3S1\TRC3500\Project 3\breath-rate-estimation\P3_STM32\Thermistor_input\STM32L432KCUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Thermistor_input.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

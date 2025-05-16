@@ -1,21 +1,21 @@
-11:15:59 **** Incremental Build of configuration Debug for project Thermistor_input ****
+11:51:15 **** Incremental Build of configuration Debug for project Thermistor_input ****
 make -j16 all 
-arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32L432xx -c -I../Core/Inc -I../Drivers/STM32L4xx_HAL_Driver/Inc -I../Drivers/STM32L4xx_HAL_Driver/Inc/Legacy -I../Drivers/CMSIS/Device/ST/STM32L4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/main.o"
-arm-none-eabi-gcc -o "Thermistor_input.elf" @"objects.list"   -mcpu=cortex-m4 -T"C:\Users\samlo\Documents\Monash University\Y3S1\TRC3500\Project 3\P3_STM32\Thermistor_input\STM32L432KCUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Thermistor_input.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
-Finished building target: Thermistor_input.elf
- 
 arm-none-eabi-size  Thermistor_input.elf 
-arm-none-eabi-objdump -h -S Thermistor_input.elf  > "Thermistor_input.list"
    text	   data	    bss	    dec	    hex	filename
-  19008	     92	   2196	  21296	   5330	Thermistor_input.elf
+  19012	     92	   2196	  21300	   5334	Thermistor_input.elf
 Finished building: default.size.stdout
  
-Finished building: Thermistor_input.list
- 
-11:16:06 **** Incremental Build of configuration Debug for project Thermistor_input ****
+11:51:18 **** Incremental Build of configuration Debug for project Thermistor_input ****
 make -j16 all 
 arm-none-eabi-size  Thermistor_input.elf 
    text	   data	    bss	    dec	    hex	filename
-  19008	     92	   2196	  21296	   5330	Thermistor_input.elf
+  19012	     92	   2196	  21300	   5334	Thermistor_input.elf
+Finished building: default.size.stdout
+ 
+11:53:00 **** Incremental Build of configuration Debug for project Thermistor_input ****
+make -j16 all 
+arm-none-eabi-size  Thermistor_input.elf 
+   text	   data	    bss	    dec	    hex	filename
+  19012	     92	   2196	  21300	   5334	Thermistor_input.elf
 Finished building: default.size.stdout
  
