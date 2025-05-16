@@ -201,20 +201,29 @@ def main():
     sensor2_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
 
     running = True
-    print("Press ESC to stop the program.")
+    
     # Signal STM32 to prepare
     serialInst.write("SX".encode('utf-8'))
     serialInst.flush()
 
     # Save sensor data with timestamp in the filename
     current_time = time.strftime("%H-%M")
+
+    # Add a wait to arm device if we decide to do that here
+    # Wait for the STM32 to send "START"
+    print("Waiting for STM32 to be ARMED (press the button)...")
+    while True:
+        if serialInst.in_waiting:
+            line = serialInst.readline().decode('utf-8').strip()
+            if line == "ARMED":
+                print("STM32 started. Beginning data collection.")
+                break
+    print("Press ESC to stop the program.")
     
     os.makedirs("data", exist_ok=True)
     sensor_data_filename = f"./data/sensor_data_{current_time}.csv"
     with open(sensor_data_filename, "w", buffering=1) as f:
         f.write("Timestamp,Sensor1,Sensor2,BreathRate1,BreathRate2,FusedBreathRate\n")
-
-        # Add a wait to arm device if we decide to do that here
         # Caibration phase:
 
         
