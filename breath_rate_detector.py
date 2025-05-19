@@ -147,7 +147,7 @@ class BreathRateEstimator:
         signal = np.array(self.buffer)
         # Experiment with hamming or han window
         wavelet = signal * np.hamming(len(signal))
-        # wavelet = signal * np.hanning(len(signal))
+        #wavelet = signal * np.hanning(len(signal))
         # FFT
         fft_result = np.fft.rfft(wavelet)
         # get rid of phase information
@@ -155,12 +155,12 @@ class BreathRateEstimator:
 
         # Get frequency axis
         freq = np.fft.rfftfreq(len(signal), d=1/self.fs)
-
+        
         # Find peaks in frequency domain (within breathing range)
         breathing_range_mask = (freq >= 0.1) & (freq <= 1.1)  # 6-60 BPM
         valid_freqs = freq[breathing_range_mask]
         valid_magnitudes = fft_magnitude[breathing_range_mask]
-        
+        # TODO: check if thisw is enough for not on a person 
         if len(valid_magnitudes) == 0:
             return None
         
@@ -243,7 +243,9 @@ def main():
 
                         # TODO: Specify between resting, light, and heavy breathing
                         if rate1 and rate2:
-                            # Use better data fusion if if it is discussed in workshop
+                            # TODO: Use better data fusion if if it is discussed in workshop
+                            # One will have more confidence than the other
+                            # Week 11 workshop
                             fused_rate = (rate1 + rate2) / 2
                             print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
                             f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
@@ -251,7 +253,11 @@ def main():
                         print("Exiting...")
                         running = False
                     except ValueError:
-                        print(f"tf is this sh: {line}")
+                        if line == "DISARMED":
+                            print("STM32 stopped. Exiting...")
+                            running = False
+                        else:
+                            print(f"tf is this sh: {line}")
                         continue
         except Exception as e:
             print(f"Error: {e}")
