@@ -537,3 +537,21 @@ java.lang.IllegalStateException: Call stack for thread main
 
 !ENTRY org.eclipse.cdt.core 1 0 2025-05-14 11:35:52.679
 !MESSAGE Indexed 'Thermistor_input' (25 sources, 119 headers) in 4.8 sec: 12,119 declarations; 56,180 references; 9 unresolved inclusions; 1,464 syntax errors; 1,646 unresolved names (2.4%)
+!SESSION 2025-05-20 11:13:45.383 -----------------------------------------------
+eclipse.buildId=Version 1.18.1
+java.version=21.0.3
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=win32, ARCH=x86_64, WS=win32, NL=en_US
+Command-line arguments:  -os win32 -ws win32 -arch x86_64
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 4 4 2025-05-20 11:13:55.062
+!MESSAGE CubeMX plugin appears to be active, Log4j initialization might be too late.
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 1 1 2025-05-20 11:13:55.063
+!MESSAGE Log4j2 initialized with config file C:\Users\samlo\Documents\Monash University\Y3S1\TRC3500\Project 3\breath-rate-estimation\P3_STM32\.metadata\.log4j2.xml
+
+!ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2025-05-20 11:14:01.584
+!MESSAGE Started RMI Server, listening on port 41337
+
+!ENTRY org.eclipse.cdt.core 1 0 2025-05-20 12:08:54.696
+!MESSAGE Indexed 'DUAL_ADC' (23 sources, 82 headers) in 3.1 sec: 5,283 declarations; 27,531 references; 0 unresolved inclusions; 1 syntax errors; 2 unresolved names (0.0061%)
