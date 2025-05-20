@@ -19,3 +19,10 @@ arm-none-eabi-size  DUAL_ADC.elf
   22128	     92	   2356	  24576	   6000	DUAL_ADC.elf
 Finished building: default.size.stdout
  
+17:54:00 **** Incremental Build of configuration Debug for project DUAL_ADC ****
+make -j16 all 
+arm-none-eabi-size  DUAL_ADC.elf 
+   text	   data	    bss	    dec	    hex	filename
+  22128	     92	   2356	  24576	   6000	DUAL_ADC.elf
+Finished building: default.size.stdout
+ 
