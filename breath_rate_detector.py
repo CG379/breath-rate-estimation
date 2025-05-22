@@ -209,8 +209,8 @@ class BayesFusion:
             return rate1
         
         # Calculate likelihoods
-        L_sensor1 = self.likelihood(rate1, self.hypotheses, self.sensor1_sigma)
-        L_sensor2 = self.likelihood(rate2, self.hypotheses, self.sensor2_sigma)
+        L_sensor1 = self.likelihood(rate1, self.hypotheses, self.sigma_temp)
+        L_sensor2 = self.likelihood(rate2, self.hypotheses, self.sigma_stretch)
 
         # Posterior is probability distribution of each possible breath rate is, 
         # given the evidence from both sensors
