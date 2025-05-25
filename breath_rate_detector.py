@@ -5,6 +5,7 @@ import numpy as np
 from collections import deque
 import time
 import os
+import matplotlib.pyplot as plt
 
 ''' Assumptions:
 Breathing signals are low-frequency (~0.2 - 0.5 Hz)
@@ -173,12 +174,66 @@ class BreathRateEstimator:
 
 
 
-    # Might not need this extra averaging of buffer breathrates (introduces extra lag)
-    def get_breath_rate(self):
-        """Get the most recent breath rate estimate."""
-        if len(self.output_buffer) < self.window_size:
+
+class BayesFusion:
+    def __init__(self, hypothesis_range=(6, 60, 0.1)):
+        self.hypotheses = np.arange(*hypothesis_range)
+        self.n_hyp = len(self.hypotheses)
+        # Prior = expected distribution of breath rates
+        self.prior = np.ones(self.n_hyp) / self.n_hyp
+        
+        # TODO: Find correct sigmas
+        # Higher sigma = less reliable
+        # Lower sigma = more reliable
+        self.sigma_temp = 0.05
+        self.sigma_stretch = 0.05
+
+
+        # For visualization
+        self.latest_fusion = None
+        self.latest_rates = [None, None]
+
+    def likelihood(self, measured_rate, hypothesis_rates, sigma):
+        """Calculate likelihood of hypotheses given a measurement"""
+        return np.exp(-0.5 * ((measured_rate - hypothesis_rates) / sigma) ** 2)
+    
+    def fuse_estimates(self, rate1, rate2):
+        self.latest_rates = [rate1, rate2]
+
+        # If either rate is None, return the other one
+        if rate1 is None and rate2 is None:
             return None
-        return np.mean(self.output_buffer)
+        elif rate1 is None:
+            return rate2
+        elif rate2 is None:
+            return rate1
+        
+        # Calculate likelihoods
+        L_sensor1 = self.likelihood(rate1, self.hypotheses, self.sigma_temp)
+        L_sensor2 = self.likelihood(rate2, self.hypotheses, self.sigma_stretch)
+
+        # Posterior is probability distribution of each possible breath rate is, 
+        # given the evidence from both sensors
+        # Combine evidence using Bayes' rule
+        unnormalized_posterior = L_sensor1 * L_sensor2 * self.prior
+        # Normalize the posterior
+        posterior = unnormalized_posterior / np.sum(unnormalized_posterior)
+
+        # Store for visualization
+        self.latest_fusion = {
+            'L_sensor1': L_sensor1,
+            'L_sensor2': L_sensor2,
+            'posterior': posterior
+        }
+
+        # MAP estimate = max probability in posterior distrobution
+        map_estimate = self.hypotheses[np.argmax(posterior)]
+        
+        return map_estimate
+
+    def visualize_fusion(self):
+        # TODO: Figure out how do continously update the plot
+        return
 
 
 
@@ -199,6 +254,9 @@ def main():
     # Put whatever sampeling rate the STM32 is using
     sensor1_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
     sensor2_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
+
+    # For fusion, assume everything will fall in 6-60 BPM range
+    fusion = BayesFusion(hypothesis_range=(6, 60, 0.1))
 
     running = True
     
@@ -224,9 +282,7 @@ def main():
     sensor_data_filename = f"./data/sensor_data_{current_time}.csv"
     with open(sensor_data_filename, "w", buffering=1) as f:
         f.write("Timestamp,Sensor1,Sensor2,BreathRate1,BreathRate2,FusedBreathRate\n")
-        # Caibration phase:
-
-        
+        # TODO: might do Caibration phase if time allows
         try:
             while running:
                 line = serialInst.readline().decode('utf-8').strip()
@@ -235,20 +291,27 @@ def main():
                         timestamp, value1, value2 = line.split(",")
                         timestamp = float(timestamp)
                         # For debugging
+                        # DPS pipeline
+                        # TODO: campture sample data of each DSP layer for report
                         smoothed1 = sensor1_estimator.update(float(value1), timestamp)
                         smoothed2 = sensor2_estimator.update(float(value2), timestamp)
 
-                        rate1 = sensor1_estimator.estimate_breath_rate()
-                        rate2 = sensor2_estimator.estimate_breath_rate()
+                        # TODO: Check if thermistor setup works with FFT estimation
+                        rate1 = sensor1_estimator.fft_breath_rate()
+                        rate2 = sensor2_estimator.fft_breath_rate()
 
-                        # TODO: Specify between resting, light, and heavy breathing
                         if rate1 and rate2:
+                            fused_rate = fusion.fuse_estimates(rate1, rate2)
                             # TODO: Use better data fusion if if it is discussed in workshop
                             # One will have more confidence than the other
                             # Week 11 workshop
-                            fused_rate = (rate1 + rate2) / 2
-                            print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
-                            f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
+                            if fused_rate is not None:
+                                print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
+                                f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
+
+                                # TODO: Add visualisation here
+                                # Update every 100 samples? 
+
                     except KeyboardInterrupt:
                         print("Exiting...")
                         running = False
