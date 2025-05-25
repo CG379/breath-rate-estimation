@@ -1112,3 +1112,33 @@ Command-line arguments:  -os win32 -ws win32 -arch x86_64
 
 !ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2025-05-21 15:04:15.551
 !MESSAGE Started RMI Server, listening on port 41337
+!SESSION 2025-05-25 14:08:53.471 -----------------------------------------------
+eclipse.buildId=Version 1.18.1
+java.version=21.0.3
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=win32, ARCH=x86_64, WS=win32, NL=en_US
+Command-line arguments:  -os win32 -ws win32 -arch x86_64
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 4 4 2025-05-25 14:09:12.806
+!MESSAGE CubeMX plugin appears to be active, Log4j initialization might be too late.
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 1 1 2025-05-25 14:09:12.806
+!MESSAGE Log4j2 initialized with config file C:\Users\samlo\Documents\Monash University\Y3S1\TRC3500\Project 3\breath-rate-estimation\P3_STM32\.metadata\.log4j2.xml
+
+!ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2025-05-25 14:09:19.686
+!MESSAGE Started RMI Server, listening on port 41337
+!SESSION 2025-05-25 15:48:00.365 -----------------------------------------------
+eclipse.buildId=Version 1.18.1
+java.version=21.0.3
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=win32, ARCH=x86_64, WS=win32, NL=en_US
+Command-line arguments:  -os win32 -ws win32 -arch x86_64
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 4 4 2025-05-25 15:48:08.018
+!MESSAGE CubeMX plugin appears to be active, Log4j initialization might be too late.
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 1 1 2025-05-25 15:48:08.019
+!MESSAGE Log4j2 initialized with config file C:\Users\samlo\Documents\Monash University\Y3S1\TRC3500\Project 3\breath-rate-estimation\P3_STM32\.metadata\.log4j2.xml
+
+!ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2025-05-25 15:48:14.387
+!MESSAGE Started RMI Server, listening on port 41337
