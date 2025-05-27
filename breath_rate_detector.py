@@ -78,67 +78,62 @@ def apply_lowpass(new_sample, zf, b, a):
     output, zf = lfilter(b, a, [new_sample], zi=zf)
     return output[0], zf
 
+def butter_highpass_coeffs(cutoff, fs, order=4):
+    """Design a highpass Butterworth filter."""
+    nyq = 0.5 * fs
+    norm_cutoff = cutoff / nyq
+    return butter(order, norm_cutoff, btype='high')
 
+def apply_highpass(new_sample, zf, b, a):
+    """Apply single-step IIR high-pass filter with filter memory (state zf)."""
+    output, zf = lfilter(b, a, [new_sample], zi=zf)
+    return output[0], zf
 
 class BreathRateEstimator:
     def __init__(self, buffer_size=750, sampling_rate=50, window_size=5, drift_window=200):
         self.fs = sampling_rate
-        self.timestamp_buffer = deque(maxlen=buffer_size)
+        self.window_size = window_size
+        # Low pass
         self.b, self.a = butter_lowpass_coeffs(2.0, sampling_rate)
         self.zf = np.zeros(max(len(self.a), len(self.b)) - 1)
-        self.window_size = window_size
-        self.buffer = deque(maxlen=buffer_size) # use singular buffer if we want to use FFT
+        # High pass
+        self.b_hp, self.a_hp = butter_highpass_coeffs(0.05, sampling_rate)
+        self.zf_hp = np.zeros(max(len(self.a_hp), len(self.b_hp)) - 1)
+        
+        # Raw signal buffer for DSP comparison
+        self.raw_buffer = deque(maxlen=buffer_size) 
+        # Low pass filtered buffer
         self.filtered_buffer = deque(maxlen=drift_window)
-        self.smooth_buffer = deque(maxlen=window_size)
-        self.output_buffer = deque(maxlen=sampling_rate * 15)
+        # Removed drift buffer (rolling mean)
+        self.no_drift_buffer = deque(maxlen=window_size)
+
+        # Final buffer for peak detection and FFT
+        # Smoothed signal buffer
+        self.buffer = deque(maxlen=buffer_size) 
+
+        self.timestamp_buffer = deque(maxlen=buffer_size)
 
     def update(self, new_sample, timestamp):
-        #TODO: rework DSP pipeline, include FFT somewhere? 
+
+        # Raw signal buffer
+        self.raw_buffer.append(new_sample)
         # Low-pass filter
         filtered, self.zf = apply_lowpass(new_sample, self.zf, self.b, self.a)
-        
-        # Drift removal (rolling mean)
-        # TODO: fix drift removal
+        # Low pass filtered buffer
         self.filtered_buffer.append(filtered)
-        baseline = np.mean(self.filtered_buffer)
-        detrended = filtered - baseline
 
-        # Smoothing (moving average)
-        self.smooth_buffer.append(detrended)
-        smoothed = np.mean(self.smooth_buffer)
+        # Drift removal logic
+        detrended, self.zf_hp = apply_highpass(filtered, self.zf_hp, self.b_hp, self.a_hp)
 
-        # Save to buffers
-        self.output_buffer.append(smoothed)
+        # Drift removal buffer
+        self.no_drift_buffer.append(detrended)
+        
+        # Smoothing using rolling mean
+        smoothed = np.mean(self.no_drift_buffer)
+        # Final smoothed buffer
         self.buffer.append(smoothed)  # For peak detection
         self.timestamp_buffer.append(float(timestamp))
         return smoothed
-
-    def estimate_breath_rate(self):
-        """Estimate breath rate from buffered signal and actual timestamps.
-        1. Find peaks in the signal
-        2. Calculate intervals between peaks
-        3. Calculate average interval time
-        4. Convert to breaths per minute
-        """
-        if len(self.buffer) < self.fs * 5:
-            return None  # Not enough data
-
-        signal = np.array(self.buffer)
-        timestamps = np.array(self.timestamp_buffer)
-        
-        # STM outputs in miliseconds, convert to seconds
-        # 
-        timestamps_seconds = timestamps * 0.1
-        
-        peaks, _ = find_peaks(signal, distance=self.fs * 0.5)  # Can adjust threshold
-        if len(peaks) < 2:
-            return None
-
-        peak_times = timestamps_seconds[peaks]
-        intervals = np.diff(peak_times)
-
-        avg_breath_time = np.mean(intervals)
-        return 60 / avg_breath_time  # breaths per minute
     
     def fft_breath_rate(self):
         # TODO: Check if full DSP pipline is needed before FFT
@@ -161,7 +156,7 @@ class BreathRateEstimator:
         breathing_range_mask = (freq >= 0.1) & (freq <= 1.1)  # 6-60 BPM
         valid_freqs = freq[breathing_range_mask]
         valid_magnitudes = fft_magnitude[breathing_range_mask]
-        # TODO: check if thisw is enough for not on a person 
+        # TODO: check if this is enough for no breathing
         if len(valid_magnitudes) == 0:
             return None
         
@@ -171,6 +166,61 @@ class BreathRateEstimator:
         
         # Convert to BPM
         return dominant_freq * 60
+    
+    def show_DSP_pipeline(self, save_path=None):
+        '''Graphs for report showing each step of DSP pipeline'''
+        plt.figure(figsize=(12, 10))
+    
+        # Create time arrays for each buffer (they may have different lengths)
+        time_raw = np.arange(len(self.raw_buffer)) / self.fs
+        time_filtered = np.arange(len(self.filtered_buffer)) / self.fs
+        time_no_drift = np.arange(len(self.no_drift_buffer)) / self.fs
+        time_smoothed = np.arange(len(self.buffer)) / self.fs
+        
+        # Plot 1: Raw Signal
+        plt.subplot(4, 1, 1)
+        plt.plot(time_raw, self.raw_buffer, label='Raw Signal', color='blue')
+        plt.title('Raw Signal')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.grid(True)
+        plt.legend()
+        
+        # Plot 2: Low-pass Filtered
+        plt.subplot(4, 1, 2)
+        plt.plot(time_filtered, self.filtered_buffer, label='Low-pass Filtered', color='orange')
+        plt.title('Low-pass Filtered Signal')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.grid(True)
+        plt.legend()
+        
+        # Plot 3: Drift Removed
+        plt.subplot(4, 1, 3)
+        plt.plot(time_no_drift, self.no_drift_buffer, label='Drift Removed', color='green')
+        plt.title('Drift Removed Signal (High-pass Filtered)')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.grid(True)
+        plt.legend()
+        
+        # Plot 4: Final Smoothed
+        plt.subplot(4, 1, 4)
+        plt.plot(time_smoothed, self.buffer, label='Smoothed Signal', color='red')
+        plt.title('Final Smoothed Signal')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.grid(True)
+        plt.legend()
+        
+        plt.tight_layout()
+        
+        # Save the figure
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"DSP pipeline visualization saved to {save_path}")
+        
+        # Close the figure to free memory
+        plt.close()
 
 
 
@@ -269,7 +319,7 @@ def main():
 
     # Add a wait to arm device if we decide to do that here
     # Wait for the STM32 to send "START"
-    print("Waiting for STM32 to be ARMED (press the button)...")
+    print("Waiting for STM32 to be ARMED...")
     while True:
         if serialInst.in_waiting:
             line = serialInst.readline().decode('utf-8').strip()
@@ -288,6 +338,7 @@ def main():
                 line = serialInst.readline().decode('utf-8').strip()
                 if line:
                     try:
+                        # TODO: Check if thermistor and band need same DSP pipeline
                         timestamp, value1, value2 = line.split(",")
                         timestamp = float(timestamp)
                         # For debugging
@@ -302,9 +353,6 @@ def main():
 
                         if rate1 and rate2:
                             fused_rate = fusion.fuse_estimates(rate1, rate2)
-                            # TODO: Use better data fusion if if it is discussed in workshop
-                            # One will have more confidence than the other
-                            # Week 11 workshop
                             if fused_rate is not None:
                                 print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
                                 f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
@@ -328,6 +376,11 @@ def main():
     serial_conn.disconnect()
             
     print(f"Sensor data saved to {sensor_data_filename}")
+
+    os.makedirs("data/figs", exist_ok=True)
+    sensor1_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor1_{timestamp}.png")
+    sensor2_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor2_{timestamp}.png")
+    print("DSP pipeline visualizations saved.")
 
 if __name__ == "__main__":
     main()
