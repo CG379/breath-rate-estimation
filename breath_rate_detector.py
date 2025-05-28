@@ -281,10 +281,65 @@ class BayesFusion:
         
         return map_estimate
 
-    def visualize_fusion(self):
+    def init_fusion(self):
         # TODO: Figure out how do continously update the plot
-        return
+        # init plots 
+        plt.ion() # interactive mode non blocking
+        plt.figure(figsize=(12, 10))
+        plt.subplot(3, 1, 1)
+        self.posterior_line, = plt.plot([], [], label='Posterior', color='blue')
+        plt.title('Posterior Distribution')
+        plt.xlabel('Hypotheses (Breath Rate)')
+        plt.ylabel('Probability')
+        plt.grid(True)
+        plt.legend()
 
+        plt.subplot(3, 1, 2)
+        self.sensor1_line, = plt.plot([], [], label='Sensor 1 Likelihood', color='green', linestyle='--')
+        plt.title('Sensor 1 Likelihood')
+        plt.xlabel('Hypotheses (Breath Rate)')
+        plt.ylabel('Probability')
+        plt.grid(True)
+        plt.legend()
+
+        plt.subplot(3, 1, 3)
+        self.sensor2_line, = plt.plot([], [], label='Sensor 2 Likelihood', color='red', linestyle='--')
+        plt.title('Sensor 2 Likelihood')
+        plt.xlabel('Hypotheses (Breath Rate)')
+        plt.ylabel('Probability')
+        plt.grid(True)
+        plt.legend()
+
+        plt.tight_layout()
+        return
+    
+    def update_visualization(self):
+        if self.latest_fusion is None:
+            return
+        hypotheses = self.hypotheses
+        posterior = self.latest_fusion['posterior']
+        L_sensor1 = self.latest_fusion['L_sensor1']
+        L_sensor2 = self.latest_fusion['L_sensor2']
+
+
+        # update graph 
+        self.posterior_line.set_data(hypotheses,posterior)
+        self.sensor1_line.set_data(hypotheses, L_sensor1)   
+        self.sensor2_line.set_data(hypotheses, L_sensor2)
+
+        plt.subplot(3, 1, 1)
+        plt.xlim(min(hypotheses), max(hypotheses))
+        plt.ylim(0, max(posterior) * 1.2)
+
+        plt.subplot(3, 1, 2)
+        plt.xlim(min(hypotheses), max(hypotheses))
+        plt.ylim(0, max(L_sensor1) * 1.2)
+
+        plt.subplot(3, 1, 3)
+        plt.xlim(min(hypotheses), max(hypotheses))
+        plt.ylim(0, max(L_sensor2) * 1.2)
+
+        plt.pause(0.001)  # change depending on how fast graph update
 
 
 # Create a SerialConnection instance
@@ -334,6 +389,8 @@ def main():
         f.write("Timestamp,Sensor1,Sensor2,BreathRate1,BreathRate2,FusedBreathRate\n")
         # TODO: might do Caibration phase if time allows
         try:
+            fusion.init_fusion()
+            i = 0
             while running:
                 line = serialInst.readline().decode('utf-8').strip()
                 if line:
@@ -358,7 +415,10 @@ def main():
                                 f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
 
                                 # TODO: Add visualisation here
-                                # Update every 100 samples? 
+                                if (i % 100) == 0:  
+                                    fusion.update_visualization()
+                                # Update every 100 samples?  tick
+                        i += 1
 
                     except KeyboardInterrupt:
                         print("Exiting...")
