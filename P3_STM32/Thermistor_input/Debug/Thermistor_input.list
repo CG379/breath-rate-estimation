@@ -508,8 +508,8 @@ int main(void)
  80005f8:	4907      	ldr	r1, [pc, #28]	@ (8000618 <main+0x6c>)
  80005fa:	4808      	ldr	r0, [pc, #32]	@ (800061c <main+0x70>)
  80005fc:	f003 f850 	bl	80036a0 <HAL_UART_Transmit>
-	  HAL_Delay(1);
- 8000600:	2001      	movs	r0, #1
+	  HAL_Delay(100);
+ 8000600:	2064      	movs	r0, #100	@ 0x64
  8000602:	f000 fb5d 	bl	8000cc0 <HAL_Delay>
 	  HAL_ADC_Start(&hadc1);
  8000606:	bf00      	nop
