@@ -1,10 +1,10 @@
-17:08:11 **** Incremental Build of configuration Debug for project Thermistor_input ****
+11:39:07 **** Incremental Build of configuration Debug for project Thermistor_input ****
 make -j16 all 
 arm-none-eabi-size  Thermistor_input.elf 
    text	   data	    bss	    dec	    hex	filename
-  18996	     92	   2196	  21284	   5324	Thermistor_input.elf
+  18988	     92	   2196	  21276	   531c	Thermistor_input.elf
 Finished building: default.size.stdout
  
 
-17:08:11 Build Finished. 0 errors, 0 warnings. (took 263ms)
+11:39:07 Build Finished. 0 errors, 0 warnings. (took 209ms)
 

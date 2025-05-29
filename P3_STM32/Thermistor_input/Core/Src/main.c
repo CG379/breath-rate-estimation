@@ -108,9 +108,9 @@ int main(void)
 	  ADC_value = HAL_ADC_GetValue(&hadc1);
 
 	  //sprintf(uart_buf, "%lu,%lu,%u\r\n",time_counter,ADC_value,1);
-	  sprintf(uart_buf, "ADC Value: %lu\r\n",ADC_value);
+	  sprintf(uart_buf, "%lu\r\n",ADC_value);
 	  HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, strlen(uart_buf), 100);
-	  HAL_Delay(100);
+	  HAL_Delay(1);
 	  //time_counter = time_counter + 1;
     /* USER CODE END WHILE */
 
@@ -223,8 +223,8 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_8;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_2CYCLES_5;
-  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.SamplingTime = ADC_SAMPLETIME_640CYCLES_5;
+  sConfig.SingleDiff = ADC_DIFFERENTIAL_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
