@@ -110,7 +110,7 @@ int main(void)
 	  //sprintf(uart_buf, "%lu,%lu,%u\r\n",time_counter,ADC_value,1);
 	  sprintf(uart_buf, "%lu\r\n",ADC_value);
 	  HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, strlen(uart_buf), 100);
-	  HAL_Delay(1);
+	  HAL_Delay(100);
 	  //time_counter = time_counter + 1;
     /* USER CODE END WHILE */
 
