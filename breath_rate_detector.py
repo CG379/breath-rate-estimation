@@ -90,11 +90,11 @@ def apply_highpass(new_sample, zf, b, a):
     return output[0], zf
 
 class BreathRateEstimator:
-    def __init__(self, buffer_size=750, sampling_rate=50, window_size=5, drift_window=200):
+    def __init__(self, buffer_size=750, sampling_rate=10, window_size=5):
         self.fs = sampling_rate
         self.window_size = window_size
         # Low pass
-        self.b, self.a = butter_lowpass_coeffs(2.0, sampling_rate)
+        self.b, self.a = butter_lowpass_coeffs(1.5, sampling_rate)
         self.zf = np.zeros(max(len(self.a), len(self.b)) - 1)
         # High pass
         self.b_hp, self.a_hp = butter_highpass_coeffs(0.05, sampling_rate)
@@ -103,9 +103,9 @@ class BreathRateEstimator:
         # Raw signal buffer for DSP comparison
         self.raw_buffer = deque(maxlen=buffer_size) 
         # Low pass filtered buffer
-        self.filtered_buffer = deque(maxlen=drift_window)
+        self.filtered_buffer = deque(maxlen=buffer_size)
         # Removed drift buffer (rolling mean)
-        self.no_drift_buffer = deque(maxlen=window_size)
+        self.no_drift_buffer = deque(maxlen=buffer_size)
 
         # Final buffer for peak detection and FFT
         # Smoothed signal buffer
@@ -114,26 +114,36 @@ class BreathRateEstimator:
         self.timestamp_buffer = deque(maxlen=buffer_size)
 
     def update(self, new_sample, timestamp):
+        """
+        Process a new input sample through:
+        1. Low-pass filter
+        2. High-pass filter (for drift removal)
+        3. Rolling average (for smoothing)
 
-        # Raw signal buffer
+        Each stage is buffered for visualization.
+        """
+
+        # Stage 0: Raw
         self.raw_buffer.append(new_sample)
-        # Low-pass filter
+
+        # Stage 1: Low-pass filter
         filtered, self.zf = apply_lowpass(new_sample, self.zf, self.b, self.a)
-        # Low pass filtered buffer
         self.filtered_buffer.append(filtered)
 
-        # Drift removal logic
+        # Stage 2: High-pass filter on low-passed signal
         detrended, self.zf_hp = apply_highpass(filtered, self.zf_hp, self.b_hp, self.a_hp)
-
-        # Drift removal buffer
         self.no_drift_buffer.append(detrended)
-        
-        # Smoothing using rolling mean
-        smoothed = np.mean(self.no_drift_buffer)
-        # Final smoothed buffer
-        self.buffer.append(smoothed)  # For peak detection
+
+        # Stage 3: Rolling average smoothing (on drift-removed signal)
+        window = list(self.no_drift_buffer)[-self.window_size:]
+        smoothed = np.mean(window)
+        self.buffer.append(smoothed)
+
+        # Timestamps for all stages (assumed same for alignment)
         self.timestamp_buffer.append(float(timestamp))
+
         return smoothed
+
     
     def fft_breath_rate(self):
         # TODO: Check if full DSP pipline is needed before FFT
