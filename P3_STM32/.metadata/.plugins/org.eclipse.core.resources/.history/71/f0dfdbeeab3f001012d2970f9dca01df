@@ -68,7 +68,21 @@ static void MX_TIM6_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	if (GPIO_Pin == GPIO_PIN_8)
+	{
+		// debouncing
+		static uint32_t last_tick = 0; // Store the last tick time
+		uint32_t current_tick = HAL_GetTick();
 
+		if ((current_tick - last_tick) > 50)
+		{
+			last_tick = current_tick; // Update the last tick time
+			HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+		}
+	}
+}
 /* USER CODE END 0 */
 
 /**
@@ -110,6 +124,8 @@ int main(void)
 
   // initiate ADC Transfer to DMA, clocked by the compare register
   HAL_ADC_Start_DMA(&hadc1, (uint32_t *) adc_buffer, BUFFER_SIZE);
+
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -119,10 +135,12 @@ int main(void)
 	  // Format ADC values into a string
 	  if (uart_ready)
 	  {
-		  snprintf(msg, sizeof(msg), "ADC1: %lu, ADC2: %lu\r\n", adc_buffer[0], adc_buffer[1]);
+		  /* data format: sensor1_conductive_data_ADC,sensor2_thermistor_data_ADC,time*/
+		  snprintf(msg, sizeof(msg), "%lu, %lu, %lu\r\n", adc_buffer[0], adc_buffer[1],timer_value);
 		  HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
 		  uart_ready = 0;
 	  }
+
 	  HAL_Delay(100);
 
 
@@ -238,7 +256,7 @@ static void MX_ADC1_Init(void)
   sConfig.Channel = ADC_CHANNEL_8;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SamplingTime = ADC_SAMPLETIME_640CYCLES_5;
-  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.SingleDiff = ADC_DIFFERENTIAL_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
@@ -248,8 +266,9 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_9;
+  sConfig.Channel = ADC_CHANNEL_10;
   sConfig.Rank = ADC_REGULAR_RANK_2;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -278,9 +297,9 @@ static void MX_TIM6_Init(void)
 
   /* USER CODE END TIM6_Init 1 */
   htim6.Instance = TIM6;
-  htim6.Init.Prescaler = 8-1;
+  htim6.Init.Prescaler = 1;
   htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = 10-1;
+  htim6.Init.Period = 10000-1;
   htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
   {
@@ -369,9 +388,9 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PA5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_5;
-  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  /*Configure GPIO pin : PA8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
@@ -381,6 +400,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD3_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -398,6 +421,8 @@ void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
 	uart_ready = 1;
 	htim6.Instance->CNT=0;
 }
+
+
 /* USER CODE END 4 */
 
 /**

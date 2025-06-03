@@ -115,10 +115,11 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
 
     __HAL_RCC_GPIOA_CLK_ENABLE();
     /**ADC1 GPIO Configuration
-    PA6     ------> ADC1_IN11
-    PA7     ------> ADC1_IN12
+    PA3     ------> ADC1_IN8
+    PA4     ------> ADC1_IN9
+    PA5     ------> ADC1_IN10
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+    GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG_ADC_CONTROL;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
@@ -166,78 +167,17 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* hadc)
     __HAL_RCC_ADC_CLK_DISABLE();
 
     /**ADC1 GPIO Configuration
-    PA6     ------> ADC1_IN11
-    PA7     ------> ADC1_IN12
+    PA3     ------> ADC1_IN8
+    PA4     ------> ADC1_IN9
+    PA5     ------> ADC1_IN10
     */
-    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_6|GPIO_PIN_7);
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5);
 
     /* ADC1 DMA DeInit */
     HAL_DMA_DeInit(hadc->DMA_Handle);
     /* USER CODE BEGIN ADC1_MspDeInit 1 */
 
     /* USER CODE END ADC1_MspDeInit 1 */
-  }
-
-}
-
-/**
-  * @brief DAC MSP Initialization
-  * This function configures the hardware resources used in this example
-  * @param hdac: DAC handle pointer
-  * @retval None
-  */
-void HAL_DAC_MspInit(DAC_HandleTypeDef* hdac)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  if(hdac->Instance==DAC1)
-  {
-    /* USER CODE BEGIN DAC1_MspInit 0 */
-
-    /* USER CODE END DAC1_MspInit 0 */
-    /* Peripheral clock enable */
-    __HAL_RCC_DAC1_CLK_ENABLE();
-
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    /**DAC1 GPIO Configuration
-    PA5     ------> DAC1_OUT2
-    */
-    GPIO_InitStruct.Pin = GPIO_PIN_5;
-    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-    /* USER CODE BEGIN DAC1_MspInit 1 */
-
-    /* USER CODE END DAC1_MspInit 1 */
-
-  }
-
-}
-
-/**
-  * @brief DAC MSP De-Initialization
-  * This function freeze the hardware resources used in this example
-  * @param hdac: DAC handle pointer
-  * @retval None
-  */
-void HAL_DAC_MspDeInit(DAC_HandleTypeDef* hdac)
-{
-  if(hdac->Instance==DAC1)
-  {
-    /* USER CODE BEGIN DAC1_MspDeInit 0 */
-
-    /* USER CODE END DAC1_MspDeInit 0 */
-    /* Peripheral clock disable */
-    __HAL_RCC_DAC1_CLK_DISABLE();
-
-    /**DAC1 GPIO Configuration
-    PA5     ------> DAC1_OUT2
-    */
-    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_5);
-
-    /* USER CODE BEGIN DAC1_MspDeInit 1 */
-
-    /* USER CODE END DAC1_MspDeInit 1 */
   }
 
 }
