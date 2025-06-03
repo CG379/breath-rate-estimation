@@ -1,6 +1,6 @@
 import serial.tools.list_ports
 # Use find_peaks from scipy.signal and get breath rate from peaks
-from scipy.signal import butter, lfilter, detrend, find_peaks, welch, savgol_filter
+from scipy.signal import butter, sosfilt_zi, sosfilt, find_peaks, welch, savgol_filter
 import numpy as np
 from collections import deque
 import time
@@ -12,7 +12,7 @@ Breathing signals are low-frequency (~0.2 - 0.5 Hz)
 Any drift will be < 0.05Hz
 
 '''
-# TODO: fix breath rate for stm timer, data fusion
+
 class SerialConnection:
     def __init__(self, baudrate=115200):
         self.serialInst = serial.Serial()
@@ -68,85 +68,69 @@ class SerialConnection:
             print("Connection closed")
 
 
-def butter_lowpass_coeffs(cutoff, fs, order=4):
+def butter_lowpass_sos(cutoff, fs, order=4):
     nyq = 0.5 * fs
     norm_cutoff = cutoff / nyq
-    return butter(order, norm_cutoff, btype='low')
+    return butter(order, norm_cutoff, btype='low', output='sos')
 
-def apply_lowpass(new_sample, zf, b, a):
-    """Apply single-step IIR low-pass filter with filter memory (state zf)."""
-    output, zf = lfilter(b, a, [new_sample], zi=zf)
-    return output[0], zf
-
-def butter_highpass_coeffs(cutoff, fs, order=4):
-    """Design a highpass Butterworth filter."""
+def butter_highpass_sos(cutoff, fs, order=4):
     nyq = 0.5 * fs
     norm_cutoff = cutoff / nyq
-    return butter(order, norm_cutoff, btype='high')
+    return butter(order, norm_cutoff, btype='high', output='sos')
 
-def apply_highpass(new_sample, zf, b, a):
-    """Apply single-step IIR high-pass filter with filter memory (state zf)."""
-    output, zf = lfilter(b, a, [new_sample], zi=zf)
-    return output[0], zf
 
 class BreathRateEstimator:
     def __init__(self, buffer_size=750, sampling_rate=10, window_size=3):
         self.fs = sampling_rate
         self.window_size = window_size
-        # Low pass
-        self.b, self.a = butter_lowpass_coeffs(1.5, sampling_rate)
-        self.zf = np.zeros(max(len(self.a), len(self.b)) - 1)
-        # High pass
-        self.b_hp, self.a_hp = butter_highpass_coeffs(0.06, sampling_rate)
-        self.zf_hp = np.zeros(max(len(self.a_hp), len(self.b_hp)) - 1)
         
-        # Raw signal buffer for DSP comparison
+        # Use SOS format for better numerical stability
+        self.sos_lp = butter_lowpass_sos(2, sampling_rate)
+        self.sos_hp = butter_highpass_sos(0.1, sampling_rate)  # Increased cutoff
+        
+        # Get steady-state initial conditions
+        self.zi_lp_unit = sosfilt_zi(self.sos_lp)
+        self.zi_hp_unit = sosfilt_zi(self.sos_hp)
+        
+        # Will be initialized on first sample
+        self.zi_lp = None
+        self.zi_hp = None
+        self.first_sample = True
+        
+        # Buffers
         self.raw_buffer = deque(maxlen=buffer_size) 
-        # Low pass filtered buffer
         self.filtered_buffer = deque(maxlen=buffer_size)
-        # Removed drift buffer (rolling mean)
         self.no_drift_buffer = deque(maxlen=buffer_size)
-
-        # Final buffer for peak detection and FFT
-        # Smoothed signal buffer
         self.buffer = deque(maxlen=buffer_size) 
-
         self.timestamp_buffer = deque(maxlen=buffer_size)
-
-        self.last_rate = None  # For adaptive peak detection
+        self.last_rate = None
 
     def update(self, new_sample, timestamp):
-        """
-        Process a new input sample through:
-        1. Low-pass filter
-        2. High-pass filter (for drift removal)
-        3. Rolling average (for smoothing)
-
-        Each stage is buffered for visualization.
-        """
+        # Initialize filter states on first sample
+        if self.first_sample:
+            self.zi_lp = self.zi_lp_unit * new_sample
+            self.zi_hp = self.zi_hp_unit * new_sample
+            self.first_sample = False
 
         # Stage 0: Raw
         self.raw_buffer.append(new_sample)
 
-        # Stage 1: Low-pass filter
-        filtered, self.zf = apply_lowpass(new_sample, self.zf, self.b, self.a)
-        self.filtered_buffer.append(filtered)
+        # Stage 1: Low-pass filter (using SOS)
+        filtered, self.zi_lp = sosfilt(self.sos_lp, [new_sample], zi=self.zi_lp)
+        self.filtered_buffer.append(filtered[0])
 
-        # Stage 2: High-pass filter on low-passed signal
-        # Remove drift by subtracting a rolling mean (removes slow drift)
-        detrended, self.zf_hp = apply_highpass(filtered, self.zf_hp, self.b_hp, self.a_hp)
-        self.no_drift_buffer.append(detrended)
+        # Stage 2: High-pass filter (using SOS)
+        detrended, self.zi_hp = sosfilt(self.sos_hp, [filtered[0]], zi=self.zi_hp)
+        self.no_drift_buffer.append(detrended[0])
 
-        # Stage 3: Rolling average smoothing (on drift-removed signal)
+        # Stage 3: Rolling average smoothing
         if len(self.buffer) > 0:
-            alpha = 0.4  # Higher alpha = less smoothing, faster response
-            smoothed = alpha * detrended + (1 - alpha) * self.buffer[-1]
+            alpha = 0.4
+            smoothed = alpha * detrended[0] + (1 - alpha) * self.buffer[-1]
         else:
-            smoothed = detrended
+            smoothed = detrended[0]
         
         self.buffer.append(smoothed)
-
-        # Timestamps for all stages (assumed same for alignment)
         self.timestamp_buffer.append(float(timestamp))
 
         return smoothed
@@ -163,7 +147,7 @@ class BreathRateEstimator:
         signal = np.array(list(self.buffer)[-window_size:])
         
         # Better preprocessing
-        signal = detrend(signal, type='linear')
+        #signal = detrend(signal, type='linear')
         
         # Apply Savitzky-Golay filter for smoothing while preserving peaks
         win_len = min(len(signal) // 5 * 2 + 1, 51)
@@ -178,7 +162,7 @@ class BreathRateEstimator:
         
         # Adaptive parameters
         min_prominence = max(0.5 * noise_std, 0.2)
-        min_height = np.percentile(signal, 80)
+        min_height = np.percentile(signal, 60)
 
         if self.last_rate:
             expected_period = self.fs * 60 / self.last_rate
@@ -191,7 +175,7 @@ class BreathRateEstimator:
             max_distance = int(expected_period * 1.5)
         else:
             min_distance = int(self.fs * 60 / 30)  # 30 BPM max
-            max_distance = int(self.fs * 60 / 6)   # 6 BPM min
+            max_distance = int(self.fs * 60 / 4)   # 6 BPM min
         
         # Find peaks
         peaks, properties = find_peaks(
@@ -264,7 +248,7 @@ class BreathRateEstimator:
         else:
             signal = np.array(self.buffer)
         
-        signal = detrend(np.array(self.buffer))
+        #signal = detrend(np.array(self.buffer))
         signal = (signal - np.mean(signal)) / (np.std(signal) + 1e-6)
         
         # Zero-pad for better frequency resolution
@@ -275,7 +259,7 @@ class BreathRateEstimator:
                         nfft=n_fft, detrend='constant')
         
         # Focus on breathing range
-        mask = (freqs >= 0.1) & (freqs <= 0.5)  # 6-30 BPM
+        mask = (freqs >= 0.08) & (freqs <= 0.5)  # 6-30 BPM
         valid_freqs = freqs[mask]
         valid_psd = psd[mask]
         
@@ -581,8 +565,8 @@ serialInst = serial_conn.serialInst
 def main():
     # Buffer length (seconds) = buffer_size / sampling_rate
     # Put whatever sampeling rate the STM32 is using
-    sensor1_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
-    sensor2_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
+    sensor1_estimator = BreathRateEstimator(buffer_size=500, sampling_rate=10)
+    sensor2_estimator = BreathRateEstimator(buffer_size=500, sampling_rate=10)
 
     # For fusion, assume everything will fall in 6-60 BPM range
     fusion = BayesFusion(hypothesis_range=(6, 60, 0.1))
@@ -611,7 +595,7 @@ def main():
     sensor_data_filename = f"./data/sensor_data_{current_time}.csv"
     with open(sensor_data_filename, "w", buffering=1) as f:
         f.write("Timestamp,Sensor1,Sensor2,BreathRate1,BreathRate2,FusedBreathRate\n")
-        # TODO: might do Caibration phase if time allows
+
         try:
             while running:
                 line = serialInst.readline().decode('utf-8').strip()
@@ -622,11 +606,10 @@ def main():
                         timestamp = float(timestamp)
                         # For debugging
                         # DPS pipeline
-                        # TODO: campture sample data of each DSP layer for report
+
                         smoothed1 = sensor1_estimator.update(float(value1), timestamp)
                         smoothed2 = sensor2_estimator.update(float(value2), timestamp)
 
-                        # TODO: Check if thermistor setup works with FFT estimation
                         rate1, sigma1 = sensor1_estimator.combined_breath_rate()
                         rate2, sigma2 = sensor2_estimator.combined_breath_rate()
 
@@ -635,9 +618,6 @@ def main():
                             if fused_rate is not None:
                                 print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
                                 f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
-
-                                # TODO: Add visualisation here
-                                # Update every 100 samples? 
 
                     except KeyboardInterrupt:
                         print("Exiting...")
