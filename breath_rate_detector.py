@@ -178,7 +178,7 @@ class BreathRateEstimator:
         
         # Adaptive parameters
         min_prominence = max(0.5 * noise_std, 0.2)
-        min_height = np.percentile(signal, 70)
+        min_height = np.percentile(signal, 80)
 
         if self.last_rate:
             expected_period = self.fs * 60 / self.last_rate
@@ -415,9 +415,10 @@ class BayesFusion:
     def __init__(self, hypothesis_range=(6, 30, 0.1)):
         self.hypotheses = np.arange(*hypothesis_range)
         self.n_hyp = len(self.hypotheses)
+        
         # Informative prior based on typical breathing rates
         mean_rate = 10
-        std_rate = 5
+        std_rate = 3
         self.prior = np.exp(-0.5 * ((self.hypotheses - mean_rate) / std_rate) ** 2)
         self.prior /= np.sum(self.prior)
         
@@ -485,43 +486,38 @@ class BayesFusion:
             prediction = self.predict_from_kalman() if self.kf_state else None
             return prediction
         
-        # Outlier detection - make sure kf_state exists
+        # Outlier detection
         if self.kf_state is not None:
             if rate1 is not None and abs(rate1 - self.kf_state) > 3 * np.sqrt(self.kf_covariance):
-                rate1 = None  # Reject outlier
+                rate1 = None
             if rate2 is not None and abs(rate2 - self.kf_state) > 3 * np.sqrt(self.kf_covariance):
                 rate2 = None
         
-        # Check if both were rejected as outliers
+        # Single sensor fallback
         if rate1 is None and rate2 is None:
             return self.predict_from_kalman() if self.kf_state else None
-        
-        # Single sensor fallback
         if rate1 is None:
             result = self.kalman_update(rate2, sigma2**2)
-            if result is not None:
-                self.update_reliability(None, rate2, result)
             return result
         if rate2 is None:
             result = self.kalman_update(rate1, sigma1**2)
-            if result is not None:
-                self.update_reliability(rate1, None, result)
             return result
         
-        # Adaptive sigma based on sensor reliability
-        sigma1_adj = sigma1 / self.sensor1_reliability
-        sigma2_adj = sigma2 / self.sensor2_reliability
+        # Fix: Use correct reliability for each sensor
+        sigma1_adj = np.clip(sigma1 / self.sensor1_reliability, 0.1, 5.0)
+        sigma2_adj = np.clip(sigma2 / self.sensor2_reliability, 0.1, 5.0)
         
         # Bayesian fusion
         L_sensor1 = self.likelihood(rate1, self.hypotheses, sigma1_adj)
         L_sensor2 = self.likelihood(rate2, self.hypotheses, sigma2_adj)
         
-        # Include temporal prior from Kalman filter
+        # Use static prior or reduce temporal prior influence
         if self.kf_state is not None:
             temporal_prior = np.exp(-0.5 * ((self.hypotheses - self.kf_state) / 
-                                   np.sqrt(self.kf_covariance)) ** 2)
+                                np.sqrt(self.kf_covariance + self.process_noise)) ** 2)
             temporal_prior /= np.sum(temporal_prior)
-            combined_prior = self.prior * temporal_prior
+            alpha = 0.3  # Reduced weight on temporal prior
+            combined_prior = (self.prior ** (1 - alpha)) * (temporal_prior ** alpha)
             combined_prior /= np.sum(combined_prior)
         else:
             combined_prior = self.prior
@@ -529,15 +525,26 @@ class BayesFusion:
         posterior = L_sensor1 * L_sensor2 * combined_prior
         posterior /= np.sum(posterior)
         
-        # MAP estimate
-        map_estimate = self.hypotheses[np.argmax(posterior)]
+        # Use the full posterior distribution, not just MAP
+        # Weighted mean gives a smoother estimate
+        fused_estimate = np.sum(self.hypotheses * posterior)
         
-        # Update Kalman filter
-        fused_estimate = self.kalman_update(map_estimate, 
-                                           1.0/np.sqrt(1/sigma1_adj**2 + 1/sigma2_adj**2))
+        # Estimate uncertainty from posterior spread
+        posterior_variance = np.sum((self.hypotheses - fused_estimate)**2 * posterior)
         
-        if fused_estimate is not None:
-            self.update_reliability(rate1, rate2, fused_estimate)
+        # Update Kalman with the Bayesian estimate and its uncertainty
+        self.kalman_update(fused_estimate, posterior_variance)
+        
+        # Update reliability based on consistency between sensors
+        sensor_agreement = abs(rate1 - rate2)
+        if sensor_agreement < 2.0:  # Good agreement
+            self.sensor1_reliability = min(1.0, self.sensor1_reliability * 1.05)
+            self.sensor2_reliability = min(1.0, self.sensor2_reliability * 1.05)
+        else:  # Poor agreement - reduce reliability of the outlier
+            if abs(rate1 - fused_estimate) > abs(rate2 - fused_estimate):
+                self.sensor1_reliability *= 0.95
+            else:
+                self.sensor2_reliability *= 0.95
         
         return fused_estimate
     
@@ -558,8 +565,6 @@ class BayesFusion:
         self.kf_covariance = (1 - kalman_gain) * predicted_covariance
         
         return self.kf_state
-
-
 
 # Create a SerialConnection instance
 serial_conn = SerialConnection(baudrate=115200)
@@ -661,20 +666,3 @@ if __name__ == "__main__":
 
 
 
-
-'''
-
-Initial thoughts on DSP pipeline:
-1. Low pass filter to remove high frequency noise
-2. Remove linear drift (if any)
-3. Smooth the data (might not be needed)
-
-Decided on Late fusion: DSP each sensor data seperately, estimate breath rate of each, then combine 
-Reasons:
-1. Each sensor is different, merging raw values might obscure individual signal characteristics
-2. Improved robustness to noise if one signal drops out/is noisy
-3. Easier to make, debug and expand
-
-
-TODO: Figure out method for collection 'true' breath rate data for report analysis
-'''
