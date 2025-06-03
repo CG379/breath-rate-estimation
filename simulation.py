@@ -2,91 +2,75 @@ import numpy as np
 import time
 from collections import deque
 import matplotlib.pyplot as plt
-from scipy.signal import butter, lfilter, detrend, find_peaks, welch, savgol_filter
+from scipy.signal import butter, lfilter, detrend, find_peaks, welch, savgol_filter, sosfilt_zi, sosfilt
 import os
 import threading
 import queue
 
 # Keep all your existing filter and class definitions as they are
-def butter_lowpass_coeffs(cutoff, fs, order=4):
+def butter_lowpass_sos(cutoff, fs, order=4):
     nyq = 0.5 * fs
     norm_cutoff = cutoff / nyq
-    return butter(order, norm_cutoff, btype='low')
+    return butter(order, norm_cutoff, btype='low', output='sos')
 
-def apply_lowpass(new_sample, zf, b, a):
-    """Apply single-step IIR low-pass filter with filter memory (state zf)."""
-    output, zf = lfilter(b, a, [new_sample], zi=zf)
-    return output[0], zf
-
-def butter_highpass_coeffs(cutoff, fs, order=4):
-    """Design a highpass Butterworth filter."""
+def butter_highpass_sos(cutoff, fs, order=4):
     nyq = 0.5 * fs
     norm_cutoff = cutoff / nyq
-    return butter(order, norm_cutoff, btype='high')
+    return butter(order, norm_cutoff, btype='high', output='sos')
 
-def apply_highpass(new_sample, zf, b, a):
-    """Apply single-step IIR high-pass filter with filter memory (state zf)."""
-    output, zf = lfilter(b, a, [new_sample], zi=zf)
-    return output[0], zf
 
 class BreathRateEstimator:
     def __init__(self, buffer_size=750, sampling_rate=10, window_size=3):
         self.fs = sampling_rate
         self.window_size = window_size
-        # Low pass
-        self.b, self.a = butter_lowpass_coeffs(1.5, sampling_rate)
-        self.zf = np.zeros(max(len(self.a), len(self.b)) - 1)
-        # High pass
-        self.b_hp, self.a_hp = butter_highpass_coeffs(0.06, sampling_rate)
-        self.zf_hp = np.zeros(max(len(self.a_hp), len(self.b_hp)) - 1)
         
-        # Raw signal buffer for DSP comparison
+        # Use SOS format for better numerical stability
+        self.sos_lp = butter_lowpass_sos(2, sampling_rate)
+        self.sos_hp = butter_highpass_sos(0.1, sampling_rate)  # Increased cutoff
+        
+        # Get steady-state initial conditions
+        self.zi_lp_unit = sosfilt_zi(self.sos_lp)
+        self.zi_hp_unit = sosfilt_zi(self.sos_hp)
+        
+        # Will be initialized on first sample
+        self.zi_lp = None
+        self.zi_hp = None
+        self.first_sample = True
+        
+        # Buffers
         self.raw_buffer = deque(maxlen=buffer_size) 
-        # Low pass filtered buffer
         self.filtered_buffer = deque(maxlen=buffer_size)
-        # Removed drift buffer (rolling mean)
         self.no_drift_buffer = deque(maxlen=buffer_size)
-
-        # Final buffer for peak detection and FFT
-        # Smoothed signal buffer
         self.buffer = deque(maxlen=buffer_size) 
-
         self.timestamp_buffer = deque(maxlen=buffer_size)
-
-        self.last_rate = None  # For adaptive peak detection
+        self.last_rate = None
 
     def update(self, new_sample, timestamp):
-        """
-        Process a new input sample through:
-        1. Low-pass filter
-        2. High-pass filter (for drift removal)
-        3. Rolling average (for smoothing)
-
-        Each stage is buffered for visualization.
-        """
+        # Initialize filter states on first sample
+        if self.first_sample:
+            self.zi_lp = self.zi_lp_unit * new_sample
+            self.zi_hp = self.zi_hp_unit * new_sample
+            self.first_sample = False
 
         # Stage 0: Raw
         self.raw_buffer.append(new_sample)
 
-        # Stage 1: Low-pass filter
-        filtered, self.zf = apply_lowpass(new_sample, self.zf, self.b, self.a)
-        self.filtered_buffer.append(filtered)
+        # Stage 1: Low-pass filter (using SOS)
+        filtered, self.zi_lp = sosfilt(self.sos_lp, [new_sample], zi=self.zi_lp)
+        self.filtered_buffer.append(filtered[0])
 
-        # Stage 2: High-pass filter on low-passed signal
-        # Remove drift by subtracting a rolling mean (removes slow drift)
-        detrended, self.zf_hp = apply_highpass(filtered, self.zf_hp, self.b_hp, self.a_hp)
-        self.no_drift_buffer.append(detrended)
+        # Stage 2: High-pass filter (using SOS)
+        detrended, self.zi_hp = sosfilt(self.sos_hp, [filtered[0]], zi=self.zi_hp)
+        self.no_drift_buffer.append(detrended[0])
 
-        # Stage 3: Rolling average smoothing (on drift-removed signal)
+        # Stage 3: Rolling average smoothing
         if len(self.buffer) > 0:
-            alpha = 0.4  # Higher alpha = less smoothing, faster response
-            smoothed = alpha * detrended + (1 - alpha) * self.buffer[-1]
+            alpha = 0.4
+            smoothed = alpha * detrended[0] + (1 - alpha) * self.buffer[-1]
         else:
-            smoothed = detrended
+            smoothed = detrended[0]
         
         self.buffer.append(smoothed)
-
-        # Timestamps for all stages (assumed same for alignment)
         self.timestamp_buffer.append(float(timestamp))
 
         return smoothed
@@ -118,7 +102,7 @@ class BreathRateEstimator:
         
         # Adaptive parameters
         min_prominence = max(0.5 * noise_std, 0.2)
-        min_height = np.percentile(signal, 70)
+        min_height = np.percentile(signal, 60)
 
         if self.last_rate:
             expected_period = self.fs * 60 / self.last_rate
@@ -131,7 +115,7 @@ class BreathRateEstimator:
             max_distance = int(expected_period * 1.5)
         else:
             min_distance = int(self.fs * 60 / 30)  # 30 BPM max
-            max_distance = int(self.fs * 60 / 6)   # 6 BPM min
+            max_distance = int(self.fs * 60 / 4)   # 6 BPM min
         
         # Find peaks
         peaks, properties = find_peaks(
@@ -215,7 +199,7 @@ class BreathRateEstimator:
                         nfft=n_fft, detrend='constant')
         
         # Focus on breathing range
-        mask = (freqs >= 0.1) & (freqs <= 0.5)  # 6-30 BPM
+        mask = (freqs >= 0.08) & (freqs <= 0.5)  # 6-30 BPM
         valid_freqs = freqs[mask]
         valid_psd = psd[mask]
         
@@ -358,7 +342,7 @@ class BayesFusion:
         
         # Informative prior based on typical breathing rates
         mean_rate = 10
-        std_rate = 5
+        std_rate = 3
         self.prior = np.exp(-0.5 * ((self.hypotheses - mean_rate) / std_rate) ** 2)
         self.prior /= np.sum(self.prior)
         
@@ -426,43 +410,38 @@ class BayesFusion:
             prediction = self.predict_from_kalman() if self.kf_state else None
             return prediction
         
-        # Outlier detection - make sure kf_state exists
+        # Outlier detection
         if self.kf_state is not None:
             if rate1 is not None and abs(rate1 - self.kf_state) > 3 * np.sqrt(self.kf_covariance):
-                rate1 = None  # Reject outlier
+                rate1 = None
             if rate2 is not None and abs(rate2 - self.kf_state) > 3 * np.sqrt(self.kf_covariance):
                 rate2 = None
         
-        # Check if both were rejected as outliers
+        # Single sensor fallback
         if rate1 is None and rate2 is None:
             return self.predict_from_kalman() if self.kf_state else None
-        
-        # Single sensor fallback
         if rate1 is None:
             result = self.kalman_update(rate2, sigma2**2)
-            if result is not None:
-                self.update_reliability(None, rate2, result)
             return result
         if rate2 is None:
             result = self.kalman_update(rate1, sigma1**2)
-            if result is not None:
-                self.update_reliability(rate1, None, result)
             return result
         
-        # Adaptive sigma based on sensor reliability
-        sigma1_adj = sigma1 / self.sensor1_reliability
-        sigma2_adj = sigma2 / self.sensor2_reliability
+        # Fix: Use correct reliability for each sensor
+        sigma1_adj = np.clip(sigma1 / self.sensor1_reliability, 0.1, 5.0)
+        sigma2_adj = np.clip(sigma2 / self.sensor2_reliability, 0.1, 5.0)
         
         # Bayesian fusion
         L_sensor1 = self.likelihood(rate1, self.hypotheses, sigma1_adj)
         L_sensor2 = self.likelihood(rate2, self.hypotheses, sigma2_adj)
         
-        # Include temporal prior from Kalman filter
+        # Use static prior or reduce temporal prior influence
         if self.kf_state is not None:
             temporal_prior = np.exp(-0.5 * ((self.hypotheses - self.kf_state) / 
-                                   np.sqrt(self.kf_covariance)) ** 2)
+                                np.sqrt(self.kf_covariance + self.process_noise)) ** 2)
             temporal_prior /= np.sum(temporal_prior)
-            combined_prior = self.prior * temporal_prior
+            alpha = 0.3  # Reduced weight on temporal prior
+            combined_prior = (self.prior ** (1 - alpha)) * (temporal_prior ** alpha)
             combined_prior /= np.sum(combined_prior)
         else:
             combined_prior = self.prior
@@ -470,15 +449,26 @@ class BayesFusion:
         posterior = L_sensor1 * L_sensor2 * combined_prior
         posterior /= np.sum(posterior)
         
-        # MAP estimate
-        map_estimate = self.hypotheses[np.argmax(posterior)]
+        # Use the full posterior distribution, not just MAP
+        # Weighted mean gives a smoother estimate
+        fused_estimate = np.sum(self.hypotheses * posterior)
         
-        # Update Kalman filter
-        fused_estimate = self.kalman_update(map_estimate, 
-                                           1.0/np.sqrt(1/sigma1_adj**2 + 1/sigma2_adj**2))
+        # Estimate uncertainty from posterior spread
+        posterior_variance = np.sum((self.hypotheses - fused_estimate)**2 * posterior)
         
-        if fused_estimate is not None:
-            self.update_reliability(rate1, rate2, fused_estimate)
+        # Update Kalman with the Bayesian estimate and its uncertainty
+        self.kalman_update(fused_estimate, posterior_variance)
+        
+        # Update reliability based on consistency between sensors
+        sensor_agreement = abs(rate1 - rate2)
+        if sensor_agreement < 2.0:  # Good agreement
+            self.sensor1_reliability = min(1.0, self.sensor1_reliability * 1.05)
+            self.sensor2_reliability = min(1.0, self.sensor2_reliability * 1.05)
+        else:  # Poor agreement - reduce reliability of the outlier
+            if abs(rate1 - fused_estimate) > abs(rate2 - fused_estimate):
+                self.sensor1_reliability *= 0.95
+            else:
+                self.sensor2_reliability *= 0.95
         
         return fused_estimate
     
@@ -661,8 +651,8 @@ def replay_recorded_data(data_file, realtime=True):
     df = pd.read_csv(data_file)
     
     # Initialize estimators and fusion
-    sensor1_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
-    sensor2_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=50)
+    sensor1_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=10)
+    sensor2_estimator = BreathRateEstimator(buffer_size=750, sampling_rate=10)
     fusion = BayesFusion(hypothesis_range=(6, 60, 0.1))
     
     # Save results
@@ -677,8 +667,8 @@ def replay_recorded_data(data_file, realtime=True):
         
         for idx, row in df.iterrows():
             timestamp = row['Timestamp']
-            value1 = row['Sensor1']
-            value2 = row['Sensor2']
+            value1 = row['Conductive_band']
+            value2 = row['Thermistor']
             
             # If realtime mode, wait to maintain original timing
             if realtime and idx > 0:
@@ -691,11 +681,11 @@ def replay_recorded_data(data_file, realtime=True):
             smoothed1 = sensor1_estimator.update(value1, timestamp)
             smoothed2 = sensor2_estimator.update(value2, timestamp)
             
-            rate1 = sensor1_estimator.combined_breath_rate()
-            rate2 = sensor2_estimator.combined_breath_rate()
+            rate1, sigma1 = sensor1_estimator.combined_breath_rate()
+            rate2, sigma2 = sensor2_estimator.combined_breath_rate()
             
             if rate1 and rate2:
-                fused_rate = fusion.fuse_estimates(rate1, rate2)
+                fused_rate = fusion.fuse_estimates(rate1, rate2, sigma1, sigma2)
                 if fused_rate is not None:
                     print(f"Timestamp {timestamp:.2f}: Fused rate: {fused_rate:.1f} bpm")
                     f.write(f"{timestamp:.3f},{value1:.4f},{value2:.4f},{rate1:.2f},{rate2:.2f},{fused_rate:.2f}\n")
@@ -896,7 +886,7 @@ def plot_realtime_data(sensor1_estimator, sensor2_estimator, fusion, save_path=N
 # Example usage
 if __name__ == "__main__":
     # Choose which mode to run
-    mode = "simulation"  # Options: "simulation", "replay", "scenarios"
+    mode = "replay"  # Options: "simulation", "replay", "scenarios"
     
     if mode == "simulation":
         # Run live simulation
@@ -904,7 +894,7 @@ if __name__ == "__main__":
         
     elif mode == "replay":
         # Replay existing data
-        data_file = "./data/scenario_high_noise_11-07.csv"  # Replace with your file
+        data_file = "./Project3/breath-rate-estimation/serial_data_20250602_223605.csv"  # Replace with your file
         replay_recorded_data(data_file, realtime=True)
         
     elif mode == "scenarios":
