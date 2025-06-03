@@ -569,165 +569,128 @@ def clear():
     '''
     os.system('cls||echo -e \\\\033c')
 
-def start_sensor(no_breaths: int,sensor1: BreathRateEstimator, sensor2: BreathRateEstimator, fusion: BayesFusion):   
-    
-    while no_breaths != 0:
-        signal_go = "BG"
-        serialInst.write(signal_go.encode('utf-8')) # this sends the signal that we are ready to sense
-        serialInst.flush()
+class BreathRateSession:
+    def __init__(self, sensor1, sensor2, fusion, serialInst):
+        self.sensor1 = sensor1
+        self.sensor2 = sensor2
+        self.fusion = fusion
+        self.serialInst = serialInst
 
-        for j in range(6): #EXCLUSIVE, this is the loading bar
-            clear()
-            #spacer = "-"
-            bar = 'LOADING BREATH RATE SENSOR GET READY USER' + '-'*j
-            print(bar)
-            time.sleep(1)
+    def start_sensor(self, no_breaths: int):   
+        while no_breaths != 0:
+            signal_go = "BG"
+            self.serialInst.write(signal_go.encode('utf-8'))
+            self.serialInst.flush()
 
-        time_interval = 0 # store the time interval
-        
-        for i in range(4,0, -1):
-            clear()
-            print(">>> Breathe in <<<")
-            print(f">>>    {i}    <<<")
-            start_time = time.time() # we start a clock here, this is used for an interval calculation. Start as soon as it is displayed
-
-            while serialInst.in_waiting and time_interval <= 1: # we need the interval to be one second, we display the value, then record then display again.
-                sensor_data = serialInst.readline().decode('utf-8').strip()
-                timestamp, value1, value2 = sensor_data.split(",")
-                timestamp = float(timestamp)
-                #print(f"Sensor Value: {sensor_data}")
-                smoothed1 = sensor1.update(float(value1), timestamp)
-                smoothed2 = sensor2.update(float(value2), timestamp)
-
-                rate1, sigma1 = sensor1.combined_breath_rate()
-                rate2, sigma2 = sensor2.combined_breath_rate()
-
-                if rate1 and rate2:
-                    fused_rate = fusion.fuse_estimates(rate1, rate2, sigma1, sigma2)
-                    if fused_rate is not None:
-                        print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
-                        # f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
-
-                end_time = time.time()
-                time_interval = end_time - start_time # need to keep updated in the loop for an exit condition
-
-            #time.sleep(1)
-
-            time_interval = 0 # reset the time interval and get ready for another iteration
-        
-        # data_storage.append(int(0000)) # signal that we have breathed in
-        # TODO: check if we need this break
-
-        for k in range(6, 0, -1):
-            clear()
-            print("<<< Exhale >>>")
-            print(f">>>  {k}  <<<")
-            start_time = time.time() 
-
-            while serialInst.in_waiting and time_interval <= 1:
-                sensor_data = serialInst.readline().decode('utf-8').strip()
-                #print(f"Sensor Value: {sensor_data}")
-                timestamp, value1, value2 = sensor_data.split(",")
-                timestamp = float(timestamp)
-                smoothed1 = sensor1.update(float(value1), timestamp)
-                smoothed2 = sensor2.update(float(value2), timestamp)
-                rate1, sigma1 = sensor1.combined_breath_rate()
-                rate2, sigma2 = sensor2.combined_breath_rate()
-                if rate1 and rate2:
-                    fused_rate = fusion.fuse_estimates(rate1, rate2, sigma1, sigma2)
-                    if fused_rate is not None:
-                        print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
-                        # f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
-
-                end_time = time.time()
-                time_interval = end_time - start_time 
+            for j in range(6):
+                clear()
+                bar = 'LOADING BREATH RATE SENSOR GET READY USER' + '-'*j
+                print(bar)
+                time.sleep(1)
 
             time_interval = 0
-        
-        # data_storage.append(int(0000))
-        # TODO: check if we need this break
+            for i in range(4,0, -1):
+                clear()
+                print(">>> Breathe in <<<")
+                print(f">>>    {i}    <<<")
+                start_time = time.time()
+                while self.serialInst.in_waiting and time_interval <= 1:
+                    sensor_data = self.serialInst.readline().decode('utf-8').strip()
+                    timestamp, value1, value2 = sensor_data.split(",")
+                    timestamp = float(timestamp)
+                    smoothed1 = self.sensor1.update(float(value1), timestamp)
+                    smoothed2 = self.sensor2.update(float(value2), timestamp)
+                    rate1, sigma1 = self.sensor1.combined_breath_rate()
+                    rate2, sigma2 = self.sensor2.combined_breath_rate()
+                    if rate1 and rate2:
+                        fused_rate = self.fusion.fuse_estimates(rate1, rate2, sigma1, sigma2)
+                        if fused_rate is not None:
+                            print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
+                    end_time = time.time()
+                    time_interval = end_time - start_time
+                time_interval = 0
 
-        no_breaths -= 1
-    
-    clear()
-    print("Breath recorded, now returning.....")
-    time.sleep(1)
+            for k in range(6, 0, -1):
+                clear()
+                print("<<< Exhale >>>")
+                print(f">>>  {k}  <<<")
+                start_time = time.time()
+                while self.serialInst.in_waiting and time_interval <= 1:
+                    sensor_data = self.serialInst.readline().decode('utf-8').strip()
+                    timestamp, value1, value2 = sensor_data.split(",")
+                    timestamp = float(timestamp)
+                    smoothed1 = self.sensor1.update(float(value1), timestamp)
+                    smoothed2 = self.sensor2.update(float(value2), timestamp)
+                    rate1, sigma1 = self.sensor1.combined_breath_rate()
+                    rate2, sigma2 = self.sensor2.combined_breath_rate()
+                    if rate1 and rate2:
+                        fused_rate = self.fusion.fuse_estimates(rate1, rate2, sigma1, sigma2)
+                        if fused_rate is not None:
+                            print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
+                    end_time = time.time()
+                    time_interval = end_time - start_time
+                time_interval = 0
 
-    activation_menu() # return to the activation menu
-    
-def time_selection():
-    clear()
-    print(">>>>>>> List of Commands <<<<<<<")
-    print("Input time in seconds for how many breaths to record")
-    print("----------------------------------")
-    record_value = input("Input: ")
+            no_breaths -= 1
 
-    start_sensor(record_value) # we type in how many breaths we want to do here, this then passes the parameter for how many loops
-
-
-def export_data(sensor1: BreathRateEstimator, sensor2: BreathRateEstimator, fusion: BayesFusion):
-    clear()
-    print(">>>>>>> List of Commands <<<<<<<")
-    command = input("Export data (Y/N): ")
-
-    if command.lower() == "y":
         clear()
-        print("Writing CSV file......")
-        with open(f"breathrate_data_{datetime.now()}.csv", mode="w", newline='') as file:
-            writer = csv.writer(file)
+        print("Breath recorded, now returning.....")
+        time.sleep(1)
+        self.activation_menu()
 
-            # for item in data_storage:
-            #     writer.writerow([item])  # wrap in list to make each a row
-            writer.writerow(["Timestamp", "Sensor1", "Sensor2", "BreathRate1", "BreathRate2", "FusedBreathRate"])
-            for i in range(len(sensor1.timestamp_buffer)):
-                timestamp = sensor1.timestamp_buffer[i]
-                value1 = sensor1.raw_buffer[i] 
-                value2 = sensor2.raw_buffer[i] 
-                rate1 = sensor1.buffer[i]
-                rate2 = sensor2.buffer[i]
-                fused_rate = fusion.fusions[i]
-                writer.writerow([timestamp, value1, value2, rate1, rate2, fused_rate])
-        
+    def time_selection(self):
         clear()
-        print("CSV file done.")
-
-        time.sleep(2)
-
-        activation_menu()
-        
-
-    elif command.lower() == "n":
-        activation_menu()
-
-
-def activation_menu(sensor1: BreathRateEstimator, sensor2: BreathRateEstimator, fusion: BayesFusion):
-    while True:
-        clear()
-        print("------- BREATH RATE SENSOR ------")
         print(">>>>>>> List of Commands <<<<<<<")
-        print("1. Information")
-        print("2. Begin")
-        print("3. Transcript")
-        print("4. Exit")
+        print("Input time in seconds for how many breaths to record")
         print("----------------------------------")
+        record_value = int(input("Input: "))
+        self.start_sensor(record_value)
 
-        command = input("Input: ")
+    def export_data(self):
+        clear()
+        print(">>>>>>> List of Commands <<<<<<<")
+        command = input("Export data (Y/N): ")
+        if command.lower() == "y":
+            clear()
+            print("Writing CSV file......")
+            with open(f"breathrate_data_{datetime.now()}.csv", mode="w", newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(["Timestamp", "Sensor1", "Sensor2", "BreathRate1", "BreathRate2", "FusedBreathRate"])
+                for i in range(len(self.sensor1.timestamp_buffer)):
+                    timestamp = self.sensor1.timestamp_buffer[i]
+                    value1 = self.sensor1.raw_buffer[i] 
+                    value2 = self.sensor2.raw_buffer[i] 
+                    rate1 = self.sensor1.buffer[i]
+                    rate2 = self.sensor2.buffer[i]
+                    fused_rate = self.fusion.fusions[i]
+                    writer.writerow([timestamp, value1, value2, rate1, rate2, fused_rate])
+            clear()
+            print("CSV file done.")
+            time.sleep(2)
+            self.activation_menu()
+        elif command.lower() == "n":
+            self.activation_menu()
 
-        # serialInst.out_waiting() check the
-        
-
-        if command.lower() == "begin" or command.lower() == "b" or command.lower() == "2":
-            time_selection()
-        
-        elif command.lower() == "transcript" or command.lower() == "t" or command.lower() == "3":
-            export_data()
-        
-        elif command.lower() == "exit":
-            print("exit has been issued... ")
-            print("---- TERMINATING ----")
-            serialInst.close()
-            break
-
+    def activation_menu(self):
+        while True:
+            clear()
+            print("------- BREATH RATE SENSOR ------")
+            print(">>>>>>> List of Commands <<<<<<<")
+            print("1. Information")
+            print("2. Begin")
+            print("3. Transcript")
+            print("4. Exit")
+            print("----------------------------------")
+            command = input("Input: ")
+            if command.lower() in ("begin", "b", "2"):
+                self.time_selection()
+            elif command.lower() in ("transcript", "t", "3"):
+                self.export_data()
+            elif command.lower() == "exit":
+                print("exit has been issued... ")
+                print("---- TERMINATING ----")
+                self.serialInst.close()
+                break
 
 # Main loop for reading data
 def main():
@@ -738,7 +701,6 @@ def main():
 
     # For fusion, assume everything will fall in 6-60 BPM range
     fusion = BayesFusion(hypothesis_range=(6, 60, 0.1))
-
     running = True
     
     # Signal STM32 to prepare
@@ -758,8 +720,9 @@ def main():
                 print("STM32 started. Beginning data collection.")
                 break
     print("Press ESC to stop the program.")
-    
-    activation_menu(sensor1_estimator,sensor2_estimator,fusion)  # Start the activation menu
+    session = BreathRateSession(sensor1_estimator, sensor2_estimator, fusion, serialInst)
+
+    session.activation_menu()
 
     # os.makedirs("data", exist_ok=True)
     # sensor_data_filename = f"./data/sensor_data_{current_time}.csv"
@@ -804,11 +767,11 @@ def main():
 
     serial_conn.disconnect()
             
-    print(f"Sensor data saved to {sensor_data_filename}")
+    # print(f"Sensor data saved to {sensor_data_filename}")
 
     os.makedirs("data/figs", exist_ok=True)
-    sensor1_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor1_{timestamp}.png")
-    sensor2_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor2_{timestamp}.png")
+    sensor1_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor1_{current_time}.png")
+    sensor2_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor2_{current_time}.png")
     print("DSP pipeline visualizations saved.")
 
 if __name__ == "__main__":
