@@ -2,7 +2,7 @@ import serial.tools.list_ports
 # Use find_peaks from scipy.signal and get breath rate from peaks
 from scipy.signal import butter, sosfilt_zi, sosfilt, find_peaks, welch, savgol_filter
 import numpy as np
-from collections import deque
+from arraydeque import ArrayDeque as deque
 import time
 import os
 import matplotlib.pyplot as plt
@@ -80,319 +80,190 @@ def butter_highpass_sos(cutoff, fs, order=4):
 
 
 class BreathRateEstimator:
-    def __init__(self, buffer_size=750, sampling_rate=10, window_size=3):
+    def __init__(self, sampling_rate=10, min_duration=5, max_duration=30):
         self.fs = sampling_rate
-        self.window_size = window_size
+        self.min_duration = min_duration  # minimum seconds needed for analysis
+        self.max_duration = max_duration  # maximum seconds to keep
         
-        # Use SOS format for better numerical stability
+        # Initialize filters
         self.sos_lp = butter_lowpass_sos(2, sampling_rate)
-        self.sos_hp = butter_highpass_sos(0.1, sampling_rate)  # Increased cutoff
-        
-        # Get steady-state initial conditions
-        self.zi_lp_unit = sosfilt_zi(self.sos_lp)
-        self.zi_hp_unit = sosfilt_zi(self.sos_hp)
-        
-        # Will be initialized on first sample
+        self.sos_hp = butter_highpass_sos(0.1, sampling_rate)
         self.zi_lp = None
         self.zi_hp = None
-        self.first_sample = True
         
-        # Buffers
-        self.raw_buffer = deque(maxlen=buffer_size) 
-        self.filtered_buffer = deque(maxlen=buffer_size)
-        self.no_drift_buffer = deque(maxlen=buffer_size)
-        self.buffer = deque(maxlen=buffer_size) 
-        self.timestamp_buffer = deque(maxlen=buffer_size)
-        self.last_rate = None
+        # Single buffer for processed signal
+        max_samples = int(self.fs * self.max_duration)
+        self.signal = deque(maxlen=max_samples)
+        self.timestamps = deque(maxlen=max_samples)
+        
+        # Rate estimation history for stability
+        self.rate_history = deque(maxlen=5)
 
-    def update(self, new_sample, timestamp):
+    def update(self, value, timestamp):
+        """Process and store a new sample"""
         # Initialize filter states on first sample
-        if self.first_sample:
-            self.zi_lp = self.zi_lp_unit * new_sample
-            self.zi_hp = self.zi_hp_unit * new_sample
-            self.first_sample = False
-
-        # Stage 0: Raw
-        self.raw_buffer.append(new_sample)
-
-        # Stage 1: Low-pass filter (using SOS)
-        filtered, self.zi_lp = sosfilt(self.sos_lp, [new_sample], zi=self.zi_lp)
-        self.filtered_buffer.append(filtered[0])
-
-        # Stage 2: High-pass filter (using SOS)
-        detrended, self.zi_hp = sosfilt(self.sos_hp, [filtered[0]], zi=self.zi_hp)
-        self.no_drift_buffer.append(detrended[0])
-
-        # Stage 3: Rolling average smoothing
-        if len(self.buffer) > 0:
-            alpha = 0.4
-            smoothed = alpha * detrended[0] + (1 - alpha) * self.buffer[-1]
-        else:
-            smoothed = detrended[0]
+        if self.zi_lp is None:
+            self.zi_lp = sosfilt_zi(self.sos_lp) * value
+            self.zi_hp = sosfilt_zi(self.sos_hp) * value
         
-        self.buffer.append(smoothed)
-        self.timestamp_buffer.append(float(timestamp))
+        # Apply filters in sequence
+        filtered, self.zi_lp = sosfilt(self.sos_lp, [value], zi=self.zi_lp)
+        detrended, self.zi_hp = sosfilt(self.sos_hp, filtered, zi=self.zi_hp)
+        
+        # Store processed signal
+        self.signal.append(detrended[0])
+        self.timestamps.append(timestamp)
+        
+        return detrended[0]
 
-        return smoothed
+    def get_signal_array(self):
+        """Get signal as numpy array with preprocessing"""
+        if len(self.signal) < self.fs * self.min_duration:
+            return None
+            
+        signal = np.array(self.signal)
+        
+        # Normalize
+        signal = signal - np.mean(signal)
+        std = np.std(signal)
+        if std > 1e-6:
+            signal = signal / std
+            
+        return signal
+
 
     def peak_breath_rate(self):
-         # Reduce minimum data requirement
-        min_samples = int(self.fs * 5)  # 5 seconds
-        if len(self.buffer) < min_samples:
+        """Estimate breathing rate using peak detection"""
+        signal = self.get_signal_array()
+        if signal is None:
             return None, None
         
-        # Use adaptive window
-        max_window = int(self.fs * 30)  # 30 seconds max
-        window_size = min(len(self.buffer), max_window)
-        signal = np.array(list(self.buffer)[-window_size:])
-        
-        # Better preprocessing
-        #signal = detrend(signal, type='linear')
-        
-        # Apply Savitzky-Golay filter for smoothing while preserving peaks
-        win_len = min(len(signal) // 5 * 2 + 1, 51)
+        # Smooth signal while preserving peaks
+        win_len = min(len(signal) // 5, 25)
+        if win_len % 2 == 0:
+            win_len += 1
         if win_len >= 5:
             signal = savgol_filter(signal, window_length=win_len, polyorder=3)
-        # Normalize
-        signal = (signal - np.mean(signal)) / (np.std(signal) + 1e-6)
         
-        # Dynamic peak detection parameters based on signal characteristics
-        # Estimate noise level
-        noise_std = np.std(np.diff(signal)) / np.sqrt(2)
+        # Adaptive peak detection parameters
+        noise_level = np.std(np.diff(signal)) / np.sqrt(2)
+        min_prominence = max(0.3, 0.5 * noise_level)
         
-        # Adaptive parameters
-        min_prominence = max(0.5 * noise_std, 0.2)
-        min_height = np.percentile(signal, 60)
-
-        if self.last_rate:
-            expected_period = self.fs * 60 / self.last_rate
-            expected_period = np.clip(expected_period, self.fs*2, self.fs*10)
-        
-        # Expected distance between peaks (with wider tolerance)
-        if hasattr(self, 'last_rate') and self.last_rate:
-            expected_period = self.fs * 60 / self.last_rate
-            min_distance = int(expected_period * 0.5)
-            max_distance = int(expected_period * 1.5)
+        # Expected breathing rate constraints
+        if self.rate_history:
+            expected_rate = np.median(self.rate_history)
+            min_distance = int(self.fs * 60 / (expected_rate * 1.5))
+            max_distance = int(self.fs * 60 / (expected_rate * 0.5))
         else:
-            min_distance = int(self.fs * 60 / 30)  # 30 BPM max
-            max_distance = int(self.fs * 60 / 4)   # 6 BPM min
+            min_distance = int(self.fs * 2)    # 30 BPM max
+            max_distance = int(self.fs * 10)   # 6 BPM min
         
         # Find peaks
-        peaks, properties = find_peaks(
+        peaks, _ = find_peaks(
             signal,
             distance=min_distance,
             prominence=min_prominence,
-            height=min_height
+            height=np.percentile(signal, 60)
         )
-        
-        # Filter peaks that are too far apart
-        if len(peaks) > 1:
-            intervals = np.diff(peaks)
-            valid_mask = intervals <= max_distance
-            # Keep peaks that form valid intervals
-            valid_peaks = [peaks[0]]
-            for i in range(len(intervals)):
-                if valid_mask[i]:
-                    valid_peaks.append(peaks[i+1])
-            peaks = np.array(valid_peaks)
         
         if len(peaks) < 3:
             return None, None
         
-        # Calculate intervals with outlier rejection
+        # Calculate intervals
         intervals = np.diff(peaks) / self.fs
         
-        # Use median absolute deviation for robust outlier detection
-        median_interval = np.median(intervals)
-        mad = np.median(np.abs(intervals - median_interval))
-        threshold = 3 * mad
+        # Remove outliers using IQR method
+        q1, q3 = np.percentile(intervals, [25, 75])
+        iqr = q3 - q1
+        valid = (intervals >= q1 - 1.5*iqr) & (intervals <= q3 + 1.5*iqr)
         
-        if mad > 0:
-            mask = np.abs(intervals - median_interval) <= threshold
-            clean_intervals = intervals[mask]
-        else:
-            clean_intervals = intervals
-        
-        if len(clean_intervals) < 2:
+        if np.sum(valid) < 2:
             return None, None
-        
-        # Use median for robustness
-        avg_period = np.median(clean_intervals)
+            
+        clean_intervals = intervals[valid]
         
         # Calculate rate
-        rate = 60.0 / avg_period
+        median_interval = np.median(clean_intervals)
+        rate = 60.0 / median_interval
         
-        # Constrain to reasonable bounds
-        rate = np.clip(rate, 6, 30)
-        
-        # Store for next iteration
-        self.last_rate = rate
-        
-        # Calculate uncertainty based on interval consistency
+        # Confidence based on consistency
         if len(clean_intervals) > 2:
-            cv = np.std(clean_intervals) / (avg_period + 1e-6)  # Coefficient of variation
-            sigma = max(0.5, min(2.0, cv * 5))  # Scale CV to uncertainty
+            cv = np.std(clean_intervals) / median_interval
+            confidence = 1.0 / (1.0 + cv * 5)
         else:
-            sigma = 1.0  # Higher uncertainty with few intervals
+            confidence = 0.5
         
-        return rate, sigma
+        return np.clip(rate, 6, 30), confidence
         
     def fft_breath_rate(self):
-        if len(self.buffer) < self.fs * 10:  # Need more data
+        """Estimate breathing rate using frequency analysis"""
+        signal = self.get_signal_array()
+        if signal is None or len(signal) < self.fs * 10:
             return None, None
         
-        buffer_duration = 30  # seconds
-        window_size = int(self.fs * buffer_duration)
-        if len(self.buffer) > window_size:
-            signal = np.array(list(self.buffer)[-window_size:])
-        else:
-            signal = np.array(self.buffer)
+        # Use Welch's method for robust spectral estimation
+        nperseg = min(len(signal) // 4, int(self.fs * 5))
+        freqs, psd = welch(signal, fs=self.fs, nperseg=nperseg, 
+                          detrend='linear', scaling='density')
         
-        #signal = detrend(np.array(self.buffer))
-        signal = (signal - np.mean(signal)) / (np.std(signal) + 1e-6)
+        # Focus on breathing frequency range
+        mask = (freqs >= 0.1) & (freqs <= 0.5)  # 6-30 BPM
+        breath_freqs = freqs[mask]
+        breath_psd = psd[mask]
         
-        # Zero-pad for better frequency resolution
-        n_fft = 2 ** int(np.ceil(np.log2(len(signal) * 4)))
-        
-        # Use Welch's method for more robust spectral estimation
-        freqs, psd = welch(signal, fs=self.fs, nperseg=min(len(signal)//4, 256), 
-                        nfft=n_fft, detrend='constant')
-        
-        # Focus on breathing range
-        mask = (freqs >= 0.08) & (freqs <= 0.5)  # 6-30 BPM
-        valid_freqs = freqs[mask]
-        valid_psd = psd[mask]
-        
-        if len(valid_psd) == 0:
+        if len(breath_psd) == 0:
             return None, None
         
-        # Find peaks in PSD
-        peaks, properties = find_peaks(valid_psd, prominence=np.max(valid_psd)*0.1)
+        # Find dominant frequency
+        peak_idx = np.argmax(breath_psd)
+        peak_freq = breath_freqs[peak_idx]
+        peak_power = breath_psd[peak_idx]
         
-        if len(peaks) == 0:
-            return None, None
+        # Estimate SNR for confidence
+        noise_power = np.median(breath_psd)
+        snr = peak_power / (noise_power + 1e-10)
+        confidence = np.tanh(snr / 10)  # Maps SNR to 0-1 range
         
-        # Select highest peak
-        idx = peaks[np.argmax(valid_psd[peaks])]
-        
-        # Parabolic interpolation for sub-bin accuracy
-        if 0 < idx < len(valid_psd) - 1:
-            y1, y2, y3 = valid_psd[idx-1:idx+2]
-            x0 = (y3 - y1) / (2 * (2*y2 - y1 - y3))
-            freq_est = valid_freqs[idx] + x0 * (valid_freqs[1] - valid_freqs[0])
-        else:
-            freq_est = valid_freqs[idx]
-        
-        # Better SNR estimation
-        signal_power = valid_psd[idx]
-        noise_mask = np.ones(len(valid_psd), dtype=bool)
-        noise_mask[max(0, idx-3):min(len(valid_psd), idx+4)] = False
-        noise_power = np.median(valid_psd[noise_mask]) if np.any(noise_mask) else 1e-6
-        
-        snr = 10 * np.log10(signal_power / noise_power)
-        sigma = 1.0 / (snr + 1e-6)
-        sigma = np.clip(sigma, 0.1, 2.0)
-  
-        
-        return freq_est * 60, sigma
+        rate = peak_freq * 60
+        return np.clip(rate, 6, 30), confidence
 
     def combined_breath_rate(self):
-        # Check how much data we have
-        data_duration = len(self.buffer) / self.fs
+        """Combined rate estimation with intelligent fusion"""
+        # Try both methods
+        rate_peaks, conf_peaks = self.peak_breath_rate()
+        rate_fft, conf_fft = self.fft_breath_rate()
         
-        # Use different strategies based on available data
-        if data_duration < 5:
-            # Not enough data
+        # Handle cases where one method fails
+        if rate_peaks is None and rate_fft is None:
             return None, None
-        elif data_duration < 10:
-            # Early stage - rely more on peak detection
-            rate_peak, sigma_peak = self.peak_breath_rate()
-            return rate_peak, sigma_peak if rate_peak else (None, None)
+        if rate_peaks is None:
+            result = rate_fft, conf_fft
+        elif rate_fft is None:
+            result = rate_peaks, conf_peaks
         else:
-            # Enough data - use both methods
-            rate_fft, sigma_fft = self.fft_breath_rate()
-            rate_peak, sigma_peak = self.peak_breath_rate()
-            
-            if rate_fft is None and rate_peak is None:
-                return None, None
-            if rate_fft is None:
-                return rate_peak, sigma_peak
-            if rate_peak is None:
-                return rate_fft, sigma_fft
-            
-            # Check for agreement
-            if abs(rate_fft - rate_peak) > 5:  # Disagreement > 5 BPM
-                # Trust the one with lower uncertainty
-                if sigma_fft < sigma_peak:
-                    return rate_fft, sigma_fft
+            # Both methods succeeded - weighted average
+            if abs(rate_peaks - rate_fft) > 3:
+                # Methods disagree - trust higher confidence
+                if conf_peaks > conf_fft:
+                    result = rate_peaks, conf_peaks
                 else:
-                    return rate_peak, sigma_peak
+                    result = rate_fft, conf_fft
+            else:
+                # Methods agree - combine them
+                total_conf = conf_peaks + conf_fft
+                rate = (rate_peaks * conf_peaks + rate_fft * conf_fft) / total_conf
+                confidence = min(1.0, total_conf / 1.5)
+                result = rate, confidence
+        
+        # Update history
+        if result[0] is not None:
+            self.rate_history.append(result[0])
             
-            # Normal weighted average
-            sigma_fft = max(0.1, sigma_fft)
-            sigma_peak = max(0.1, sigma_peak)
-            
-            w_fft = 1.0 / (sigma_fft ** 2)
-            w_peak = 1.0 / (sigma_peak ** 2)
-            rate = (w_fft * rate_fft + w_peak * rate_peak) / (w_fft + w_peak)
-            sigma = 1.0 / np.sqrt(w_fft + w_peak)
-            
-            return rate, max(0.1, sigma)
-
-    def show_DSP_pipeline(self, save_path=None):
-        '''Graphs for report showing each step of DSP pipeline'''
-        plt.figure(figsize=(12, 10))
+        return result
     
-        # Create time arrays for each buffer (they may have different lengths)
-        time_raw = np.arange(len(self.raw_buffer)) / self.fs
-        time_filtered = np.arange(len(self.filtered_buffer)) / self.fs
-        time_no_drift = np.arange(len(self.no_drift_buffer)) / self.fs
-        time_smoothed = np.arange(len(self.buffer)) / self.fs
-        
-        # Plot 1: Raw Signal
-        plt.subplot(4, 1, 1)
-        plt.plot(time_raw, self.raw_buffer, label='Raw Signal', color='blue')
-        plt.title('Raw Signal')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Amplitude')
-        plt.grid(True)
-        plt.legend()
-        
-        # Plot 2: Low-pass Filtered
-        plt.subplot(4, 1, 2)
-        plt.plot(time_filtered, self.filtered_buffer, label='Low-pass Filtered', color='orange')
-        plt.title('Low-pass Filtered Signal')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Amplitude')
-        plt.grid(True)
-        plt.legend()
-        
-        # Plot 3: Drift Removed
-        plt.subplot(4, 1, 3)
-        plt.plot(time_no_drift, self.no_drift_buffer, label='Drift Removed', color='green')
-        plt.title('Drift Removed Signal (High-pass Filtered)')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Amplitude')
-        plt.grid(True)
-        plt.legend()
-        
-        # Plot 4: Final Smoothed
-        plt.subplot(4, 1, 4)
-        plt.plot(time_smoothed, self.buffer, label='Smoothed Signal', color='red')
-        plt.title('Final Smoothed Signal')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Amplitude')
-        plt.grid(True)
-        plt.legend()
-        
-        plt.tight_layout()
-        
-        # Save the figure
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"DSP pipeline visualization saved to {save_path}")
-        
-        # Close the figure to free memory
-        plt.close()
+    def get_buffer_duration(self):
+        """Get current buffer duration in seconds"""
+        return len(self.signal) / self.fs
 
 
 class BayesFusion:
@@ -401,154 +272,136 @@ class BayesFusion:
         self.n_hyp = len(self.hypotheses)
         
         # Informative prior based on typical breathing rates
-        mean_rate = 10
-        std_rate = 3
+        mean_rate = 15
+        std_rate = 5
         self.prior = np.exp(-0.5 * ((self.hypotheses - mean_rate) / std_rate) ** 2)
         self.prior /= np.sum(self.prior)
         
         # Kalman filter for temporal tracking
         self.kf_state = None
         self.kf_covariance = 1.0
-        self.process_noise = 0.1
+        self.process_noise = 0.5  # Increased to allow more variation
         
         # Sensor reliability tracking
         self.sensor1_reliability = 1.0
         self.sensor2_reliability = 1.0
-        self.error_history = {'sensor1': deque(maxlen=5), 
-                              'sensor2': deque(maxlen=5)}
+        self.error_history = {'sensor1': deque(maxlen=10), 
+                              'sensor2': deque(maxlen=10)}
 
     def likelihood(self, measured_rate, hypothesis_rates, sigma):
         """Calculate likelihood of hypotheses given a measurement"""
-        # Prevent division by zero
-        sigma = max(sigma, 0.1)  # Minimum sigma to prevent numerical issues
-        
+        sigma = max(sigma, 0.1)
         likelihoods = np.exp(-0.5 * ((measured_rate - hypothesis_rates) / sigma) ** 2)
-        likelihoods = np.clip(likelihoods, 1e-10, 1.0)
-        return likelihoods
+        return np.clip(likelihoods, 1e-10, 1.0)
     
-    def update_reliability(self, rate1, rate2, fused_estimate):
-        """
-        Update sensor reliability scores based on consistency with fused estimate
-        and historical performance
-        """
-        # Check if fused_estimate is None
-        if fused_estimate is None:
-            return
-        
-        # Calculate errors if measurements exist
-        if rate1 is not None:
-            error1 = abs(rate1 - fused_estimate)
-            self.error_history['sensor1'].append(error1)
-        
-        if rate2 is not None:
-            error2 = abs(rate2 - fused_estimate)
-            self.error_history['sensor2'].append(error2)
-        
-        # Update reliability scores based on recent error history
-        if len(self.error_history['sensor1']) >= 5:
-            # Use inverse of mean absolute error as reliability
-            mean_error1 = np.mean(self.error_history['sensor1'])
-            self.sensor1_reliability = 1.0 / (1.0 + mean_error1)
-        
-        if len(self.error_history['sensor2']) >= 5:
-            mean_error2 = np.mean(self.error_history['sensor2'])
-            self.sensor2_reliability = 1.0 / (1.0 + mean_error2)
-        
-        # Ensure reliability stays within reasonable bounds
-        self.sensor1_reliability = np.clip(self.sensor1_reliability, 0.1, 1.0)
-        self.sensor2_reliability = np.clip(self.sensor2_reliability, 0.1, 1.0)
-    
-    def predict_from_kalman(self):
-        """Return prediction from Kalman filter when no measurements available"""
-        if self.kf_state is not None:
-            return self.kf_state
-        return None
-
     def fuse_estimates(self, rate1, rate2, sigma1, sigma2):
         # Handle missing measurements
         if rate1 is None and rate2 is None:
-            prediction = self.predict_from_kalman() if self.kf_state else None
-            return prediction
+            return self.predict_from_kalman() if self.kf_state else None
         
-        # Outlier detection
-        if self.kf_state is not None:
-            if rate1 is not None and abs(rate1 - self.kf_state) > 3 * np.sqrt(self.kf_covariance):
-                rate1 = None
-            if rate2 is not None and abs(rate2 - self.kf_state) > 3 * np.sqrt(self.kf_covariance):
-                rate2 = None
+        # Initialize Kalman if needed
+        if self.kf_state is None:
+            if rate1 is not None and rate2 is not None:
+                self.kf_state = (rate1 + rate2) / 2
+            elif rate1 is not None:
+                self.kf_state = rate1
+            elif rate2 is not None:
+                self.kf_state = rate2
+            self.kf_covariance = 1.0
+        
+        # Outlier detection with adaptive threshold
+        outlier_threshold = 3 * np.sqrt(self.kf_covariance + self.process_noise)
+        if rate1 is not None and abs(rate1 - self.kf_state) > outlier_threshold:
+            sigma1 *= 2  # Increase uncertainty instead of rejecting
+        if rate2 is not None and abs(rate2 - self.kf_state) > outlier_threshold:
+            sigma2 *= 2
         
         # Single sensor fallback
-        if rate1 is None and rate2 is None:
-            return self.predict_from_kalman() if self.kf_state else None
         if rate1 is None:
-            result = self.kalman_update(rate2, sigma2**2)
-            return result
+            return self.kalman_update(rate2, sigma2**2)
         if rate2 is None:
-            result = self.kalman_update(rate1, sigma1**2)
-            return result
+            return self.kalman_update(rate1, sigma1**2)
         
-        # Fix: Use correct reliability for each sensor
-        sigma1_adj = np.clip(sigma1 / self.sensor1_reliability, 0.1, 5.0)
-        sigma2_adj = np.clip(sigma2 / self.sensor2_reliability, 0.1, 5.0)
+        # Adjust sigmas based on reliability
+        sigma1_adj = sigma1 / np.sqrt(self.sensor1_reliability)
+        sigma2_adj = sigma2 / np.sqrt(self.sensor2_reliability)
         
         # Bayesian fusion
         L_sensor1 = self.likelihood(rate1, self.hypotheses, sigma1_adj)
         L_sensor2 = self.likelihood(rate2, self.hypotheses, sigma2_adj)
         
-        # Use static prior or reduce temporal prior influence
+        # Use adaptive prior mixing
         if self.kf_state is not None:
-            temporal_prior = np.exp(-0.5 * ((self.hypotheses - self.kf_state) / 
-                                np.sqrt(self.kf_covariance + self.process_noise)) ** 2)
+            # Temporal prior with wider spread
+            temporal_std = np.sqrt(self.kf_covariance + self.process_noise)
+            temporal_prior = np.exp(-0.5 * ((self.hypotheses - self.kf_state) / temporal_std) ** 2)
             temporal_prior /= np.sum(temporal_prior)
-            alpha = 0.3  # Reduced weight on temporal prior
-            combined_prior = (self.prior ** (1 - alpha)) * (temporal_prior ** alpha)
-            combined_prior /= np.sum(combined_prior)
+            
+            # Mix priors with fixed ratio (not time-dependent)
+            alpha = 0.3  # Fixed mixing ratio
+            combined_prior = (1 - alpha) * self.prior + alpha * temporal_prior
         else:
             combined_prior = self.prior
         
+        # Compute posterior
         posterior = L_sensor1 * L_sensor2 * combined_prior
-        posterior /= np.sum(posterior)
+        posterior /= np.sum(posterior + 1e-10)
         
-        # Use the full posterior distribution, not just MAP
-        # Weighted mean gives a smoother estimate
+        # Weighted mean estimate
         fused_estimate = np.sum(self.hypotheses * posterior)
         
         # Estimate uncertainty from posterior spread
         posterior_variance = np.sum((self.hypotheses - fused_estimate)**2 * posterior)
         
-        # Update Kalman with the Bayesian estimate and its uncertainty
+        # Update Kalman filter
         self.kalman_update(fused_estimate, posterior_variance)
         
-        # Update reliability based on consistency between sensors
-        sensor_agreement = abs(rate1 - rate2)
-        if sensor_agreement < 2.0:  # Good agreement
-            self.sensor1_reliability = min(1.0, self.sensor1_reliability * 1.05)
-            self.sensor2_reliability = min(1.0, self.sensor2_reliability * 1.05)
-        else:  # Poor agreement - reduce reliability of the outlier
-            if abs(rate1 - fused_estimate) > abs(rate2 - fused_estimate):
-                self.sensor1_reliability *= 0.95
-            else:
-                self.sensor2_reliability *= 0.95
+        # Update reliability based on sensor agreement
+        self.update_reliability_simple(rate1, rate2, fused_estimate)
         
         return fused_estimate
     
+    def update_reliability_simple(self, rate1, rate2, fused_estimate):
+        """Simplified reliability update"""
+        if rate1 is not None and rate2 is not None:
+            agreement = abs(rate1 - rate2)
+            
+            if agreement < 2.0:  # Good agreement
+                self.sensor1_reliability = min(1.0, self.sensor1_reliability + 0.02)
+                self.sensor2_reliability = min(1.0, self.sensor2_reliability + 0.02)
+            elif agreement > 5.0:  # Poor agreement
+                # Penalize the sensor further from fused estimate
+                if abs(rate1 - fused_estimate) > abs(rate2 - fused_estimate):
+                    self.sensor1_reliability = max(0.5, self.sensor1_reliability - 0.05)
+                else:
+                    self.sensor2_reliability = max(0.5, self.sensor2_reliability - 0.05)
+    
     def kalman_update(self, measurement, measurement_variance):
+        """Update Kalman filter with measurement"""
         measurement_variance = max(measurement_variance, 0.01)
+        
         if self.kf_state is None:
             self.kf_state = measurement
             self.kf_covariance = measurement_variance
             return measurement
         
         # Prediction step
-        predicted_state = self.kf_state
         predicted_covariance = self.kf_covariance + self.process_noise
         
         # Update step
         kalman_gain = predicted_covariance / (predicted_covariance + measurement_variance)
-        self.kf_state = predicted_state + kalman_gain * (measurement - predicted_state)
+        self.kf_state = self.kf_state + kalman_gain * (measurement - self.kf_state)
         self.kf_covariance = (1 - kalman_gain) * predicted_covariance
         
+        # Ensure covariance doesn't get too small
+        self.kf_covariance = max(self.kf_covariance, 0.1)
+        
         return self.kf_state
+    
+    def predict_from_kalman(self):
+        """Return prediction from Kalman filter when no measurements available"""
+        return self.kf_state if self.kf_state is not None else None
+
 
 # Create a SerialConnection instance
 serial_conn = SerialConnection(baudrate=115200)
@@ -565,8 +418,8 @@ serialInst = serial_conn.serialInst
 def main():
     # Buffer length (seconds) = buffer_size / sampling_rate
     # Put whatever sampeling rate the STM32 is using
-    sensor1_estimator = BreathRateEstimator(buffer_size=500, sampling_rate=10)
-    sensor2_estimator = BreathRateEstimator(buffer_size=500, sampling_rate=10)
+    sensor1_estimator = BreathRateEstimator(sampling_rate=10)
+    sensor2_estimator = BreathRateEstimator(sampling_rate=10)
 
     # For fusion, assume everything will fall in 6-60 BPM range
     fusion = BayesFusion(hypothesis_range=(6, 60, 0.1))
@@ -603,7 +456,7 @@ def main():
                     try:
                         # TODO: Check if thermistor and band need same DSP pipeline
                         timestamp, value1, value2 = line.split(",")
-                        timestamp = float(timestamp)
+                        timestamp = float(timestamp)/10
                         # For debugging
                         # DPS pipeline
 
@@ -636,10 +489,10 @@ def main():
             
     print(f"Sensor data saved to {sensor_data_filename}")
 
-    os.makedirs("data/figs", exist_ok=True)
-    sensor1_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor1_{timestamp}.png")
-    sensor2_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor2_{timestamp}.png")
-    print("DSP pipeline visualizations saved.")
+    # os.makedirs("data/figs", exist_ok=True)
+    # sensor1_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor1_{timestamp}.png")
+    # sensor2_estimator.show_DSP_pipeline(f"./data/figs/dsp_pipeline_sensor2_{timestamp}.png")
+    # print("DSP pipeline visualizations saved.")
 
 if __name__ == "__main__":
     main()
