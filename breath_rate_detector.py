@@ -101,6 +101,7 @@ class BreathRateEstimator:
 
     def update(self, value, timestamp):
         """Process and store a new sample"""
+        
         # Initialize filter states on first sample
         if self.zi_lp is None:
             self.zi_lp = sosfilt_zi(self.sos_lp) * value
@@ -118,7 +119,7 @@ class BreathRateEstimator:
 
     def get_signal_array(self):
         """Get signal as numpy array with preprocessing"""
-        if len(self.signal) < self.fs * self.min_duration:
+        if len(self.signal) < max(self.fs * self.min_duration, self.fs * 60 / 6 * 3):
             return None
             
         signal = np.array(self.signal)
@@ -148,7 +149,10 @@ class BreathRateEstimator:
         # Adaptive peak detection parameters
         noise_level = np.std(np.diff(signal)) / np.sqrt(2)
         min_prominence = max(0.3, 0.5 * noise_level)
-        
+
+        if self.rate_history and np.median(self.rate_history) < 9:
+            min_prominence *= 0.8
+
         # Expected breathing rate constraints
         if self.rate_history:
             expected_rate = np.median(self.rate_history)
@@ -162,8 +166,8 @@ class BreathRateEstimator:
         peaks, _ = find_peaks(
             signal,
             distance=min_distance,
-            prominence=min_prominence,
-            height=np.percentile(signal, 60)
+            prominence=min_prominence
+            #height=np.percentile(signal, 60)
         )
         
         if len(peaks) < 3:
@@ -191,7 +195,7 @@ class BreathRateEstimator:
             cv = np.std(clean_intervals) / median_interval
             confidence = 1.0 / (1.0 + cv * 5)
         else:
-            confidence = 0.5
+            confidence = 0.2
         
         return np.clip(rate, 6, 30), confidence
         
@@ -267,141 +271,55 @@ class BreathRateEstimator:
 
 
 class BayesFusion:
-    def __init__(self, hypothesis_range=(6, 30, 0.1)):
-        self.hypotheses = np.arange(*hypothesis_range)
-        self.n_hyp = len(self.hypotheses)
-        
-        # Informative prior based on typical breathing rates
-        mean_rate = 15
-        std_rate = 5
-        self.prior = np.exp(-0.5 * ((self.hypotheses - mean_rate) / std_rate) ** 2)
-        self.prior /= np.sum(self.prior)
-        
-        # Kalman filter for temporal tracking
-        self.kf_state = None
-        self.kf_covariance = 1.0
-        self.process_noise = 0.5  # Increased to allow more variation
-        
-        # Sensor reliability tracking
-        self.sensor1_reliability = 1.0
-        self.sensor2_reliability = 1.0
-        self.error_history = {'sensor1': deque(maxlen=10), 
-                              'sensor2': deque(maxlen=10)}
+    def __init__(self, min_rate=5, max_rate=25, resolution=0.1):
+        self.hypotheses = np.arange(min_rate, max_rate, resolution)
+        self.prior = np.ones(len(self.hypotheses)) / len(self.hypotheses)
+        self.current_posterior = self.prior.copy()
+        self.latest_rate = None
+        self.latest_sigma = None
 
-    def likelihood(self, measured_rate, hypothesis_rates, sigma):
-        """Calculate likelihood of hypotheses given a measurement"""
-        sigma = max(sigma, 0.1)
-        likelihoods = np.exp(-0.5 * ((measured_rate - hypothesis_rates) / sigma) ** 2)
-        return np.clip(likelihoods, 1e-10, 1.0)
-    
-    def fuse_estimates(self, rate1, rate2, sigma1, sigma2):
-        # Handle missing measurements
-        if rate1 is None and rate2 is None:
-            return self.predict_from_kalman() if self.kf_state else None
-        
-        # Initialize Kalman if needed
-        if self.kf_state is None:
-            if rate1 is not None and rate2 is not None:
-                self.kf_state = (rate1 + rate2) / 2
-            elif rate1 is not None:
-                self.kf_state = rate1
-            elif rate2 is not None:
-                self.kf_state = rate2
-            self.kf_covariance = 1.0
-        
-        # Outlier detection with adaptive threshold
-        outlier_threshold = 3 * np.sqrt(self.kf_covariance + self.process_noise)
-        if rate1 is not None and abs(rate1 - self.kf_state) > outlier_threshold:
-            sigma1 *= 2  # Increase uncertainty instead of rejecting
-        if rate2 is not None and abs(rate2 - self.kf_state) > outlier_threshold:
-            sigma2 *= 2
-        
-        # Single sensor fallback
-        if rate1 is None:
-            return self.kalman_update(rate2, sigma2**2)
-        if rate2 is None:
-            return self.kalman_update(rate1, sigma1**2)
-        
-        # Adjust sigmas based on reliability
-        sigma1_adj = sigma1 / np.sqrt(self.sensor1_reliability)
-        sigma2_adj = sigma2 / np.sqrt(self.sensor2_reliability)
-        
-        # Bayesian fusion
-        L_sensor1 = self.likelihood(rate1, self.hypotheses, sigma1_adj)
-        L_sensor2 = self.likelihood(rate2, self.hypotheses, sigma2_adj)
-        
-        # Use adaptive prior mixing
-        if self.kf_state is not None:
-            # Temporal prior with wider spread
-            temporal_std = np.sqrt(self.kf_covariance + self.process_noise)
-            temporal_prior = np.exp(-0.5 * ((self.hypotheses - self.kf_state) / temporal_std) ** 2)
-            temporal_prior /= np.sum(temporal_prior)
-            
-            # Mix priors with fixed ratio (not time-dependent)
-            alpha = 0.3  # Fixed mixing ratio
-            combined_prior = (1 - alpha) * self.prior + alpha * temporal_prior
+    def update(self, rate1, sigma1, rate2, sigma2):
+        posterior = self.current_posterior.copy()
+        log_L_total = np.zeros_like(posterior)
+        log_weights = 0
+
+        if rate1 is not None and sigma1 is not None:
+            sigma1 = max(sigma1, 0.1)
+            log_L1 = -0.5 * ((rate1 - self.hypotheses) / sigma1) ** 2
+            log_L1 -= np.max(log_L1)  # for numerical stability
+            log_L_total += log_L1
+            log_weights += 1
+
+        if rate2 is not None and sigma2 is not None:
+            sigma2 = max(sigma2, 0.1)
+            log_L2 = -0.5 * ((rate2 - self.hypotheses) / sigma2) ** 2
+            log_L2 -= np.max(log_L2)
+            log_L_total += log_L2
+            log_weights += 1
+
+        if log_weights > 0:
+            log_prior = np.log(self.current_posterior + 1e-12)
+            log_combined = log_L_total + log_prior
+            log_combined -= np.max(log_combined)
+            posterior = np.exp(log_combined)
+            posterior /= np.sum(posterior)
+            self.current_posterior = posterior
+
+            self.latest_rate = self.hypotheses[np.argmax(posterior)]
+            self.latest_sigma = np.sqrt(np.sum(posterior * 
+                                               (self.hypotheses - self.latest_rate) ** 2))
+        return self.latest_rate
+
+    def reset_prior(self, center=None):
+        if center is None:
+            self.current_posterior = np.ones(len(self.hypotheses)) / len(self.hypotheses)
         else:
-            combined_prior = self.prior
-        
-        # Compute posterior
-        posterior = L_sensor1 * L_sensor2 * combined_prior
-        posterior /= np.sum(posterior + 1e-10)
-        
-        # Weighted mean estimate
-        fused_estimate = np.sum(self.hypotheses * posterior)
-        
-        # Estimate uncertainty from posterior spread
-        posterior_variance = np.sum((self.hypotheses - fused_estimate)**2 * posterior)
-        
-        # Update Kalman filter
-        self.kalman_update(fused_estimate, posterior_variance)
-        
-        # Update reliability based on sensor agreement
-        self.update_reliability_simple(rate1, rate2, fused_estimate)
-        
-        return fused_estimate
-    
-    def update_reliability_simple(self, rate1, rate2, fused_estimate):
-        """Simplified reliability update"""
-        if rate1 is not None and rate2 is not None:
-            agreement = abs(rate1 - rate2)
-            
-            if agreement < 2.0:  # Good agreement
-                self.sensor1_reliability = min(1.0, self.sensor1_reliability + 0.02)
-                self.sensor2_reliability = min(1.0, self.sensor2_reliability + 0.02)
-            elif agreement > 5.0:  # Poor agreement
-                # Penalize the sensor further from fused estimate
-                if abs(rate1 - fused_estimate) > abs(rate2 - fused_estimate):
-                    self.sensor1_reliability = max(0.5, self.sensor1_reliability - 0.05)
-                else:
-                    self.sensor2_reliability = max(0.5, self.sensor2_reliability - 0.05)
-    
-    def kalman_update(self, measurement, measurement_variance):
-        """Update Kalman filter with measurement"""
-        measurement_variance = max(measurement_variance, 0.01)
-        
-        if self.kf_state is None:
-            self.kf_state = measurement
-            self.kf_covariance = measurement_variance
-            return measurement
-        
-        # Prediction step
-        predicted_covariance = self.kf_covariance + self.process_noise
-        
-        # Update step
-        kalman_gain = predicted_covariance / (predicted_covariance + measurement_variance)
-        self.kf_state = self.kf_state + kalman_gain * (measurement - self.kf_state)
-        self.kf_covariance = (1 - kalman_gain) * predicted_covariance
-        
-        # Ensure covariance doesn't get too small
-        self.kf_covariance = max(self.kf_covariance, 0.1)
-        
-        return self.kf_state
-    
-    def predict_from_kalman(self):
-        """Return prediction from Kalman filter when no measurements available"""
-        return self.kf_state if self.kf_state is not None else None
+            prior_sigma = 2.0
+            self.current_posterior = np.exp(-0.5 * ((self.hypotheses - center) / prior_sigma) ** 2)
+            self.current_posterior /= np.sum(self.current_posterior)
 
+    def get_distribution(self):
+        return self.hypotheses, self.current_posterior
 
 # Create a SerialConnection instance
 serial_conn = SerialConnection(baudrate=115200)
@@ -422,7 +340,7 @@ def main():
     sensor2_estimator = BreathRateEstimator(sampling_rate=10)
 
     # For fusion, assume everything will fall in 6-60 BPM range
-    fusion = BayesFusion(hypothesis_range=(6, 60, 0.1))
+    fusion = BayesFusion(min_rate=6, max_rate=25, resolution=0.1)
 
     running = True
     
@@ -454,7 +372,7 @@ def main():
                 line = serialInst.readline().decode('utf-8').strip()
                 if line:
                     try:
-                        # TODO: Check if thermistor and band need same DSP pipeline
+                        # time, conductive band, tempo sensor
                         timestamp, value1, value2 = line.split(",")
                         timestamp = float(timestamp)/10
                         # For debugging
@@ -467,7 +385,7 @@ def main():
                         rate2, sigma2 = sensor2_estimator.combined_breath_rate()
 
                         if rate1 and rate2:
-                            fused_rate = fusion.fuse_estimates(rate1, rate2, sigma1, sigma2)
+                            fused_rate = fusion.update(rate1, sigma1, rate2, sigma2)
                             if fused_rate is not None:
                                 print(f"Fused Breath Rate: {fused_rate:.2f} bpm")
                                 f.write(f"{timestamp},{value1},{value2},{rate1},{rate2},{fused_rate}\n")
